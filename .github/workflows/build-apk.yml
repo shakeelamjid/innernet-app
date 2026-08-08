@@ -5,9 +5,15 @@ name: Build Innernet APK
 # library, and a prebuilt Xray .aar from a matching release.
 on:
   workflow_dispatch:
+    inputs:
+      abis:
+        description: 'Architectures (arm64-v8a covers phones from ~2015 on; use "arm64-v8a;armeabi-v7a" to include very old devices)'
+        required: false
+        default: 'arm64-v8a'
+        type: string
   push:
     branches: [main]
-    paths: ['brand.sh', 'fix_shortcuts.py', 'branding/**', '.github/workflows/build-apk.yml']
+    paths: ['brand.sh', 'fix_shortcuts.py', 'add_webview.py', 'branding/**', '.github/workflows/build-apk.yml']
 
 permissions:
   contents: write
@@ -34,6 +40,7 @@ jobs:
       - name: Apply Innernet branding
         env:
           SITE_URL: https://innernetcorp.com/buy
+          WEB_URL: https://innernetcorp.com/m
         run: |
           chmod +x brand.sh
           ./brand.sh
@@ -105,28 +112,41 @@ jobs:
           fileName: 'innernet.keystore'
           encodedString: ${{ secrets.KEYSTORE_B64 }}
 
+      # ABI_FILTERS is an upstream-supported property, so we build one
+      # architecture instead of five, and only the playstore flavour instead of
+      # both. One APK out, not ten.
       - name: Build the APK
         working-directory: upstream/V2rayNG
+        env:
+          ABIS: ${{ inputs.abis || 'arm64-v8a' }}
         run: |
           echo "sdk.dir=${ANDROID_HOME}" > local.properties
           chmod 755 gradlew
-          ./gradlew licenseFdroidReleaseReport --no-daemon
+          echo "Building for: $ABIS"
           if [ -n "${{ steps.keystore.outputs.filePath }}" ]; then
             echo "Building SIGNED"
-            ./gradlew assembleRelease --no-daemon --stacktrace \
+            ./gradlew assemblePlaystoreRelease --no-daemon --stacktrace \
+              -PABI_FILTERS="$ABIS" \
               -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.filePath }} \
               -Pandroid.injected.signing.store.password='${{ secrets.KEYSTORE_PASSWORD }}' \
               -Pandroid.injected.signing.key.alias='${{ secrets.KEY_ALIAS }}' \
               -Pandroid.injected.signing.key.password='${{ secrets.KEYSTORE_PASSWORD }}'
           else
             echo "No keystore secret — building UNSIGNED (will not install on a phone)."
-            ./gradlew assembleRelease --no-daemon --stacktrace
+            ./gradlew assemblePlaystoreRelease --no-daemon --stacktrace -PABI_FILTERS="$ABIS"
           fi
 
       - name: Collect the APKs
         run: |
           mkdir -p out
-          find upstream/V2rayNG/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          find upstream/V2rayNG/app/build/outputs/apk -name '*.apk' \
+               ! -name '*unsigned*' -exec cp {} out/ \;
+          # rename to something a customer sees and understands
+          i=0
+          for f in out/*.apk; do
+            i=$((i+1))
+            mv "$f" "out/innernet-$(grep -oP 'versionName = "\K[^"]+' upstream/V2rayNG/app/build.gradle.kts)-$(basename "$f" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64|x86|universal' || echo app).apk"
+          done
           ls -lh out/
 
       - name: Upload as a build artifact
