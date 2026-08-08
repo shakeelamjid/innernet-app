@@ -50,6 +50,8 @@ find(r"fun setSelectServer", java_root, "MmkvManager.setSelectServer")
 find(r"fun decodeServerList", java_root, "MmkvManager.decodeServerList")
 find(r"fun removeServer\b", java_root, "MmkvManager.removeServer")
 find(r"fun stopService", java_root, "LauncherManager.stopService")
+find(r"fun decodeServerConfig", java_root, "MmkvManager.decodeServerConfig")
+find(r"fun queryAllOutboundTrafficStats", java_root, "CoreServiceManager.queryAllOutboundTrafficStats")
 find(r"fun removeServer", java_root, "MmkvManager.removeServer")
 find(r"class ScannerActivity", java_root, "ScannerActivity")
 find(r"fun importBatchConfig", java_root, "AngConfigManager.importBatchConfig")
@@ -265,13 +267,21 @@ class InnernetActivity : FragmentActivity() {{
         @JavascriptInterface
         fun hasConfig(): Boolean = !MmkvManager.getSelectServer().isNullOrEmpty()
 
-        /** Remove the stored connection from this phone. */
+        /** Put a config into the tunnel.
+         *
+         *  A config typed or pasted into the page reaches the server but not the
+         *  engine, so the page shows a plan while there is nothing to connect
+         *  with. This closes that gap.
+         */
         @JavascriptInterface
-        fun forgetConfig(): Boolean {{
+        fun importConfig(text: String): Boolean {{
             return try {{
-                runOnUiThread {{ LauncherManager.stopService(this@InnernetActivity) }}
-                MmkvManager.decodeServerList("").forEach {{ MmkvManager.removeServer(it) }}
-                true
+                val (count, _) = AngConfigManager.importBatchConfig(text, "", false)
+                if (count > 0) {{
+                    MmkvManager.decodeServerList("").firstOrNull()
+                        ?.let {{ MmkvManager.setSelectServer(it) }}
+                }}
+                count > 0
             }} catch (e: Exception) {{
                 false
             }}
@@ -348,6 +358,77 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
 
+        /** Every config the app is holding, and which one is current.
+         *
+         *  Returned as JSON so the page can offer a choice — a phone with two
+         *  cards had no way to say which one to connect with.
+         */
+        @JavascriptInterface
+        fun listConfigs(): String {{
+            return try {{
+                val selected = MmkvManager.getSelectServer().orEmpty()
+                val arr = org.json.JSONArray()
+                MmkvManager.decodeServerList("").forEach {{ guid ->
+                    val p = MmkvManager.decodeServerConfig(guid)
+                    arr.put(org.json.JSONObject()
+                        .put("id", guid)
+                        .put("name", p?.remarks ?: guid.take(8))
+                        .put("selected", guid == selected))
+                }}
+                arr.toString()
+            }} catch (e: Exception) {{
+                "[]"
+            }}
+        }}
+
+        /** Choose which config the tunnel should use. */
+        @JavascriptInterface
+        fun selectConfig(guid: String): Boolean {{
+            return try {{
+                if (guid.isBlank()) return false
+                val running = CoreServiceManager.isRunning()
+                MmkvManager.setSelectServer(guid)
+                if (running) {{
+                    // switching while connected must actually switch the tunnel
+                    runOnUiThread {{
+                        LauncherManager.stopService(this@InnernetActivity)
+                        LauncherManager.startService(this@InnernetActivity)
+                    }}
+                }}
+                true
+            }} catch (e: Exception) {{
+                false
+            }}
+        }}
+
+        /** Live traffic, so the customer can see the tunnel is actually moving.
+         *
+         *  Byte totals since the service started; the page turns successive
+         *  readings into a speed.
+         */
+        @JavascriptInterface
+        fun stats(): String {{
+            return try {{
+                if (!CoreServiceManager.isRunning()) return "{{}}"
+                var up = 0L
+                var down = 0L
+                CoreServiceManager.queryAllOutboundTrafficStats().forEach {{ stat ->
+                    if (stat.tag != com.v2ray.ang.AppConfig.TAG_BLOCKED &&
+                        stat.tag != com.v2ray.ang.AppConfig.TAG_DIRECT) {{
+                        when (stat.direction) {{
+                            com.v2ray.ang.AppConfig.UPLINK -> up += stat.value
+                            com.v2ray.ang.AppConfig.DOWNLINK -> down += stat.value
+                        }}
+                    }}
+                }}
+                org.json.JSONObject()
+                    .put("up", up).put("down", down)
+                    .put("at", System.currentTimeMillis()).toString()
+            }} catch (e: Exception) {{
+                "{{}}"
+            }}
+        }}
+
         /** The upstream screens, for when something needs debugging. */
         @JavascriptInterface
         fun advanced() {{
@@ -362,6 +443,20 @@ class InnernetActivity : FragmentActivity() {{
 path = os.path.join(java_root, "ui", "innernet", "InnernetActivity.kt")
 open(path, "w", encoding="utf-8").write(activity)
 print(f"  activity    : {os.path.relpath(path, app_dir)}")
+# ------------------------------------------------- the bridge must be complete
+# Methods have been lost mid-edit before, which silently kills a button in the
+# app while everything still compiles. Fail the build instead.
+REQUIRED = ["version", "setConnected", "isConnected", "hasConfig", "importConfig",
+            "scan", "paste", "biometric", "removeConfig", "listConfigs",
+            "selectConfig", "stats", "advanced"]
+written = open(path, encoding="utf-8").read()
+missing = [m for m in REQUIRED if f"fun {m}" not in written]
+if missing:
+    fail(f"bridge is incomplete, these methods are gone: {', '.join(missing)}")
+if written.count("{") != written.count("}"):
+    fail("generated Kotlin has unbalanced braces")
+print(f"  bridge      : {len(REQUIRED)} methods, braces balanced")
+
 
 # ---------------------------------------------------------------- manifest
 xml = open(manifest, encoding="utf-8").read()
