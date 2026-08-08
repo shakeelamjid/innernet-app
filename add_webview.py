@@ -96,6 +96,10 @@ class InnernetActivity : FragmentActivity() {{
     private lateinit var web: WebView
     private val home = "{site_url}"
 
+    private val notifyPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {{ /* proceed either way; the service degrades rather than refuses */ }}
+
     private val vpnConsent = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {{ result ->
@@ -178,6 +182,15 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
         web.addJavascriptInterface(Bridge(), "Innernet")
+
+        // Ask before the customer taps Connect, so the tunnel is not blocked at
+        // the moment it matters.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS")
+                != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {{
+            notifyPermission.launch("android.permission.POST_NOTIFICATIONS")
+        }}
         // A cache-buster on the first load guarantees a fresh page after a
         // redeploy, even if something between us and the server caches.
         val fresh = home + (if (home.contains("?")) "&" else "?") + "b=" + System.currentTimeMillis()
@@ -249,7 +262,7 @@ class InnernetActivity : FragmentActivity() {{
          *  page can tell whether the installed app is current. Without this,
          *  testing a server fix against an old APK looks like the fix failed. */
         @JavascriptInterface
-        fun version(): Int = 4
+        fun version(): Int = 5
 
         /** Start or stop the tunnel.
          *
@@ -474,6 +487,12 @@ class InnernetActivity : FragmentActivity() {{
                     .put("server", p?.server ?: "")
                     .put("port", p?.serverPort ?: "")
                     .put("running", CoreServiceManager.isRunning())
+                    .put("notifications", Build.VERSION.SDK_INT < 33 ||
+                        ContextCompat.checkSelfPermission(this@InnernetActivity,
+                            "android.permission.POST_NOTIFICATIONS") ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    .put("vpnReady", android.net.VpnService.prepare(this@InnernetActivity) == null)
+                    .put("sdk", Build.VERSION.SDK_INT)
                     .toString()
             }} catch (e: Exception) {{
                 org.json.JSONObject().put("error", e.message ?: "unknown").toString()
