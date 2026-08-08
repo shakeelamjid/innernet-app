@@ -106,6 +106,12 @@ class InnernetActivity : FragmentActivity() {{
         // never show a stale screen after the panel is redeployed
         web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         web.clearCache(true)
+        web.webChromeClient = object : android.webkit.WebChromeClient() {{
+            override fun onPermissionRequest(req: android.webkit.PermissionRequest?) {{
+                // the page's own QR scanner needs the camera
+                runOnUiThread {{ req?.grant(req.resources) }}
+            }}
+        }}
         web.webViewClient = object : WebViewClient() {{
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean {{
                 val u = url ?: return false
@@ -173,6 +179,11 @@ class InnernetActivity : FragmentActivity() {{
     }}
 
     inner class Bridge {{
+
+        /** Bridge generation. The page uses this to tell a working scan/paste
+         *  from an older build whose import never reached the page. */
+        @JavascriptInterface
+        fun version(): Int = 2
 
         /** Start or stop the tunnel. Returns whether the app is now connected. */
         @JavascriptInterface
