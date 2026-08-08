@@ -1,0 +1,93 @@
+name: Build Innernet APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['brand.sh', 'fix_shortcuts.py', 'branding/**', '.github/workflows/build-apk.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Fetch v2rayNG
+        run: git clone --depth 1 https://github.com/2dust/v2rayNG upstream
+
+      - name: Apply Innernet branding
+        env:
+          SITE_URL: https://innernetcorp.com/buy
+        run: |
+          chmod +x brand.sh
+          ./brand.sh
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Locate the Gradle project
+        id: proj
+        run: |
+          DIR="$(dirname "$(find upstream -name 'gradlew' | head -1)")"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "Gradle project: $DIR"
+
+      - name: Build release APK
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Sign the APK
+        if: ${{ env.KEYSTORE_B64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > innernet.keystore
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          for apk in $(find . -name '*-release-unsigned.apk' -o -name '*-release.apk' | grep -v signed); do
+            out="innernet-$(basename "$apk" | sed 's/-unsigned//')"
+            "$BT/zipalign" -p -f 4 "$apk" "aligned.apk"
+            "$BT/apksigner" sign \
+              --ks innernet.keystore \
+              --ks-pass "pass:$KEYSTORE_PASSWORD" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --out "$out" aligned.apk
+            "$BT/apksigner" verify "$out" && echo "signed: $out"
+          done
+          rm -f innernet.keystore aligned.apk
+
+      - name: Collect the APKs
+        run: |
+          mkdir -p out
+          find ${{ steps.proj.outputs.dir }} -name '*.apk' \
+               ! -path '*/intermediates/*' -exec cp {} out/ \;
+          ls -lh out/
+
+      - name: Upload as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: innernet-apk
+          path: out/*.apk
+          retention-days: 30
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: Innernet APK build ${{ github.run_number }}
+          files: out/*.apk
