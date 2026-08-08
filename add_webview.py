@@ -52,6 +52,10 @@ find(r"fun removeServer\b", java_root, "MmkvManager.removeServer")
 find(r"fun stopService", java_root, "LauncherManager.stopService")
 find(r"fun decodeServerConfig", java_root, "MmkvManager.decodeServerConfig")
 find(r"fun queryAllOutboundTrafficStats", java_root, "CoreServiceManager.queryAllOutboundTrafficStats")
+find(r"MSG_STATE_START_SUCCESS", java_root, "AppConfig.MSG_STATE_START_SUCCESS")
+find(r"MSG_STATE_NOT_RUNNING", java_root, "AppConfig.MSG_STATE_NOT_RUNNING")
+find(r"BROADCAST_ACTION_ACTIVITY", java_root, "AppConfig.BROADCAST_ACTION_ACTIVITY")
+find(r"fun sendMsg2Service", java_root, "MessageHelper.sendMsg2Service")
 find(r"fun removeServer", java_root, "MmkvManager.removeServer")
 find(r"class ScannerActivity", java_root, "ScannerActivity")
 find(r"fun importBatchConfig", java_root, "AngConfigManager.importBatchConfig")
@@ -96,6 +100,11 @@ class InnernetActivity : FragmentActivity() {{
     private lateinit var web: WebView
     private val home = "{site_url}"
 
+    /** What the service last told us. The core lives in another process, so this
+     *  broadcast — not a local flag — is the only honest answer. */
+    @Volatile private var serviceRunning = false
+    private var stateReceiver: android.content.BroadcastReceiver? = null
+
     private val notifyPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {{ /* proceed either way; the service degrades rather than refuses */ }}
@@ -114,14 +123,11 @@ class InnernetActivity : FragmentActivity() {{
         // Saying "connected" the instant the service is asked to start is a
         // guess. Watch until it really is, then say so.
         CoroutineScope(Dispatchers.IO).launch {{
-            repeat(40) {{
-                if (CoreServiceManager.isRunning()) {{
-                    runOnUiThread {{ pushState(true) }}
-                    return@launch
-                }}
+            repeat(50) {{
+                if (serviceRunning) return@launch      // the broadcast beat us to it
                 kotlinx.coroutines.delay(500)
             }}
-            runOnUiThread {{ pushState(false) }}
+            if (!serviceRunning) runOnUiThread {{ pushState(false) }}
         }}
     }}
 
@@ -183,6 +189,27 @@ class InnernetActivity : FragmentActivity() {{
         }}
         web.addJavascriptInterface(Bridge(), "Innernet")
 
+        stateReceiver = object : android.content.BroadcastReceiver() {{
+            override fun onReceive(ctx: Context?, intent: Intent?) {{
+                when (intent?.getIntExtra("key", 0)) {{
+                    com.v2ray.ang.AppConfig.MSG_STATE_RUNNING,
+                    com.v2ray.ang.AppConfig.MSG_STATE_START_SUCCESS -> {{
+                        serviceRunning = true; pushState(true)
+                    }}
+                    com.v2ray.ang.AppConfig.MSG_STATE_NOT_RUNNING,
+                    com.v2ray.ang.AppConfig.MSG_STATE_START_FAILURE,
+                    com.v2ray.ang.AppConfig.MSG_STATE_STOP_SUCCESS -> {{
+                        serviceRunning = false; pushState(false)
+                    }}
+                }}
+            }}
+        }}
+        ContextCompat.registerReceiver(
+            this, stateReceiver,
+            android.content.IntentFilter(com.v2ray.ang.AppConfig.BROADCAST_ACTION_ACTIVITY),
+            ContextCompat.RECEIVER_EXPORTED
+        )
+
         // Ask before the customer taps Connect, so the tunnel is not blocked at
         // the moment it matters.
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -207,9 +234,15 @@ class InnernetActivity : FragmentActivity() {{
 
     override fun onResume() {{
         super.onResume()
-        // coming back from another app must show what is actually happening,
-        // not whatever the page last animated
-        if (::web.isInitialized) pushState(CoreServiceManager.isRunning())
+        // ask the service where it stands; it answers on the broadcast above
+        com.v2ray.ang.helper.MessageHelper.sendMsg2Service(
+            this, com.v2ray.ang.AppConfig.MSG_REGISTER_CLIENT, "")
+        if (::web.isInitialized) pushState(serviceRunning)
+    }}
+
+    override fun onDestroy() {{
+        stateReceiver?.let {{ try {{ unregisterReceiver(it) }} catch (e: Exception) {{}} }}
+        super.onDestroy()
     }}
 
     override fun onBackPressed() {{
@@ -262,7 +295,7 @@ class InnernetActivity : FragmentActivity() {{
          *  page can tell whether the installed app is current. Without this,
          *  testing a server fix against an old APK looks like the fix failed. */
         @JavascriptInterface
-        fun version(): Int = 5
+        fun version(): Int = 6
 
         /** Start or stop the tunnel.
          *
@@ -285,14 +318,11 @@ class InnernetActivity : FragmentActivity() {{
                 if (consent == null) {{
                     LauncherManager.startService(this@InnernetActivity)
                     CoroutineScope(Dispatchers.IO).launch {{
-                        repeat(40) {{
-                            if (CoreServiceManager.isRunning()) {{
-                                runOnUiThread {{ pushState(true) }}
-                                return@launch
-                            }}
+                        repeat(50) {{
+                            if (serviceRunning) return@launch
                             kotlinx.coroutines.delay(500)
                         }}
-                        runOnUiThread {{ pushState(false) }}
+                        if (!serviceRunning) runOnUiThread {{ pushState(false) }}
                     }}
                 }} else {{
                     vpnConsent.launch(consent)     // result handled above
@@ -301,9 +331,9 @@ class InnernetActivity : FragmentActivity() {{
             return true
         }}
 
-        /** The truth, asked of the service rather than remembered by the page. */
+        /** The truth, as reported by the process that actually runs the tunnel. */
         @JavascriptInterface
-        fun isConnected(): Boolean = CoreServiceManager.isRunning()
+        fun isConnected(): Boolean = serviceRunning
 
         /** Is there anything to connect with? */
         @JavascriptInterface
@@ -391,7 +421,7 @@ class InnernetActivity : FragmentActivity() {{
             return try {{
                 val guid = MmkvManager.getSelectServer()
                 runOnUiThread {{
-                    if (CoreServiceManager.isRunning()) {{
+                    if (serviceRunning) {{
                         LauncherManager.stopService(this@InnernetActivity)
                     }}
                     if (!guid.isNullOrEmpty()) MmkvManager.removeServer(guid)
@@ -431,7 +461,7 @@ class InnernetActivity : FragmentActivity() {{
         fun selectConfig(guid: String): Boolean {{
             return try {{
                 if (guid.isBlank()) return false
-                val running = CoreServiceManager.isRunning()
+                val running = serviceRunning
                 MmkvManager.setSelectServer(guid)
                 if (running) {{
                     // switching while connected must actually switch the tunnel
@@ -446,15 +476,16 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
 
-        /** Live traffic, so the customer can see the tunnel is actually moving.
+        /** Not usable from here, and kept only so older pages do not break.
          *
-         *  Byte totals since the service started; the page turns successive
-         *  readings into a speed.
+         *  queryAllOutboundTrafficStats() returns nothing unless the caller is
+         *  the process running the tunnel, which this is not. The page reads
+         *  usage from the server instead.
          */
         @JavascriptInterface
         fun stats(): String {{
             return try {{
-                if (!CoreServiceManager.isRunning()) return "{{}}"
+                if (!serviceRunning) return "{{}}"
                 var up = 0L
                 var down = 0L
                 CoreServiceManager.queryAllOutboundTrafficStats().forEach {{ stat ->
@@ -486,7 +517,7 @@ class InnernetActivity : FragmentActivity() {{
                     .put("selected", p?.remarks ?: "(none)")
                     .put("server", p?.server ?: "")
                     .put("port", p?.serverPort ?: "")
-                    .put("running", CoreServiceManager.isRunning())
+                    .put("running", serviceRunning)
                     .put("notifications", Build.VERSION.SDK_INT < 33 ||
                         ContextCompat.checkSelfPermission(this@InnernetActivity,
                             "android.permission.POST_NOTIFICATIONS") ==
