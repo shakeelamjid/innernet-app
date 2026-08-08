@@ -102,8 +102,23 @@ class InnernetActivity : FragmentActivity() {{
         // Android asks the customer to allow a VPN. Without this the service
         // silently never starts, and the page happily shows a green light.
         val granted = result.resultCode == Activity.RESULT_OK
-        if (granted) LauncherManager.startService(this)
-        pushState(granted)
+        if (!granted) {{
+            pushState(false)
+            return@registerForActivityResult
+        }}
+        LauncherManager.startService(this)
+        // Saying "connected" the instant the service is asked to start is a
+        // guess. Watch until it really is, then say so.
+        CoroutineScope(Dispatchers.IO).launch {{
+            repeat(40) {{
+                if (CoreServiceManager.isRunning()) {{
+                    runOnUiThread {{ pushState(true) }}
+                    return@launch
+                }}
+                kotlinx.coroutines.delay(500)
+            }}
+            runOnUiThread {{ pushState(false) }}
+        }}
     }}
 
     private val scanner = registerForActivityResult(
@@ -251,7 +266,16 @@ class InnernetActivity : FragmentActivity() {{
                 val consent = android.net.VpnService.prepare(this@InnernetActivity)
                 if (consent == null) {{
                     LauncherManager.startService(this@InnernetActivity)
-                    pushState(true)
+                    CoroutineScope(Dispatchers.IO).launch {{
+                        repeat(40) {{
+                            if (CoreServiceManager.isRunning()) {{
+                                runOnUiThread {{ pushState(true) }}
+                                return@launch
+                            }}
+                            kotlinx.coroutines.delay(500)
+                        }}
+                        runOnUiThread {{ pushState(false) }}
+                    }}
                 }} else {{
                     vpnConsent.launch(consent)     // result handled above
                 }}
