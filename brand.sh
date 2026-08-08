@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Turn a fresh v2rayNG checkout into the Innernet client.
+#
+# Finds the app module rather than assuming paths, so an upstream reshuffle
+# doesn't silently produce an unbranded build — it fails loudly instead.
+set -euo pipefail
+
+APP_NAME="${APP_NAME:-Innernet}"
+APP_ID="${APP_ID:-com.innernetcorp.app}"
+SCHEME="${SCHEME:-innernet}"
+SITE_URL="${SITE_URL:-https://innernetcorp.com/buy}"
+BUY_LABEL="${BUY_LABEL:-Buy or renew}"
+ACCENT="${ACCENT:-#17E6C9}"
+SRC="${SRC:-upstream}"
+BRANDING="$(cd "$(dirname "$0")" && pwd)/branding"
+
+say()  { printf '  %s\n' "$*"; }
+fail() { printf '\n!! %s\n' "$*" >&2; exit 1; }
+
+[ -d "$SRC" ] || fail "No '$SRC' checkout. Run: git clone --depth 1 https://github.com/2dust/v2rayNG $SRC"
+
+# ---------------------------------------------------------------- app module
+# The Android project sits under V2rayNG/app in current upstream, but locate it
+# by looking for the module that declares an applicationId.
+GRADLE="$(grep -rl --include='build.gradle*' 'applicationId' "$SRC" | head -1 || true)"
+[ -n "$GRADLE" ] || fail "Could not find a build.gradle declaring applicationId under $SRC"
+APP_DIR="$(dirname "$GRADLE")"
+RES_DIR="$APP_DIR/src/main/res"
+[ -d "$RES_DIR" ] || fail "No res/ directory at $RES_DIR"
+say "app module : $APP_DIR"
+
+# ---------------------------------------------------------------- identity
+OLD_ID="$(grep -oE 'applicationId[[:space:]]*=?[[:space:]]*"[^"]+"' "$GRADLE" | head -1 | grep -oE '"[^"]+"' | tr -d '"')"
+[ -n "$OLD_ID" ] || fail "Could not read the existing applicationId"
+sed -i "s|\"$OLD_ID\"|\"$APP_ID\"|" "$GRADLE"
+say "app id     : $OLD_ID -> $APP_ID"
+
+# app_name across every locale that defines it
+CHANGED=0
+while IFS= read -r f; do
+    # the tag may carry attributes, e.g. translatable="false"
+    sed -i -E "s|(<string name=\"app_name\"[^>]*>)[^<]*(</string>)|\1${APP_NAME}\2|" "$f"
+    CHANGED=$((CHANGED+1))
+done < <(grep -rlE '<string name="app_name"[^>]*>' "$RES_DIR" || true)
+[ "$CHANGED" -gt 0 ] || fail "No strings.xml declared app_name — nothing was renamed"
+say "app name   : $APP_NAME  (in $CHANGED file(s))"
+
+# ---------------------------------------------------------------- icons
+ICONS=0
+for d in "$RES_DIR"/mipmap-*; do
+    [ -d "$d" ] || continue
+    dens="$(basename "$d" | sed 's/^mipmap-//')"
+    src="$BRANDING/ic_launcher_${dens}.png"
+    [ -f "$src" ] || continue
+    for target in ic_launcher ic_launcher_round; do
+        [ -f "$d/$target.png" ] && cp "$src" "$d/$target.png" && ICONS=$((ICONS+1))
+    done
+done
+# adaptive icons would override our PNG, so drop them
+rm -rf "$RES_DIR"/mipmap-anydpi-v26 2>/dev/null || true
+say "icons      : $ICONS file(s) replaced, adaptive icons removed"
+
+python3 "$(dirname "$0")/fix_shortcuts.py" "$RES_DIR" "$OLD_ID" "$APP_ID" "$SITE_URL" "$BUY_LABEL"
+
+# ---------------------------------------------------------------- colours
+mkdir -p "$RES_DIR/values"
+cat > "$RES_DIR/values/colors_innernet.xml" <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Innernet brand colours. Loaded after the upstream palette. -->
+<resources>
+    <color name="colorPrimary">$ACCENT</color>
+    <color name="colorPrimaryDark">#0C9C88</color>
+    <color name="colorAccent">$ACCENT</color>
+    <color name="colorSecondary">$ACCENT</color>
+</resources>
+XML
+say "colours    : $ACCENT"
+
+# ---------------------------------------------------------------- deep link
+# So a tap on innernet://import/<sub> from our site opens *this* app.
+MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
+[ -f "$MANIFEST" ] || fail "No AndroidManifest.xml at $MANIFEST"
+if grep -q "android:scheme=\"$SCHEME\"" "$MANIFEST"; then
+    say "deep link  : $SCHEME:// already present"
+else
+    python3 - "$MANIFEST" "$SCHEME" <<'PY'
+import re, sys
+path, scheme = sys.argv[1], sys.argv[2]
+xml = open(path, encoding='utf-8').read()
+# attach to the activity that already handles a VIEW intent, else the launcher
+m = re.search(r'<activity\b[^>]*>(?:(?!</activity>).)*?android\.intent\.action\.MAIN.*?</activity>', xml, re.S)
+if not m:
+    sys.exit("could not locate the launcher activity")
+block = m.group(0)
+filt = ('\n            <intent-filter>\n'
+        '                <action android:name="android.intent.action.VIEW" />\n'
+        '                <category android:name="android.intent.category.DEFAULT" />\n'
+        '                <category android:name="android.intent.category.BROWSABLE" />\n'
+        f'                <data android:scheme="{scheme}" />\n'
+        '            </intent-filter>\n        ')
+patched = block[:block.rfind('</activity>')] + filt + '</activity>'
+open(path, 'w', encoding='utf-8').write(xml.replace(block, patched))
+PY
+    grep -q "android:scheme=\"$SCHEME\"" "$MANIFEST" || fail "deep link was not written"
+    say "deep link  : ${SCHEME}://import/... registered"
+fi
+
+printf '\nBranding applied. Build with:\n  cd %s && ./gradlew assembleRelease\n' "$(dirname "$APP_DIR")"
