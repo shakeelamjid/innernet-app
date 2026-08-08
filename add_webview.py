@@ -245,10 +245,11 @@ class InnernetActivity : FragmentActivity() {{
 
     inner class Bridge {{
 
-        /** Bridge generation. The page uses this to tell a working scan/paste
-         *  from an older build whose import never reached the page. */
+        /** Bridge generation. Bump on every change to the methods below, so the
+         *  page can tell whether the installed app is current. Without this,
+         *  testing a server fix against an old APK looks like the fix failed. */
         @JavascriptInterface
-        fun version(): Int = 2
+        fun version(): Int = 4
 
         /** Start or stop the tunnel.
          *
@@ -479,6 +480,31 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
 
+        /** The last thing the tunnel engine said.
+         *
+         *  When a start fails, the engine has almost always written the reason.
+         *  Reading it here turns "couldn't connect" into something specific.
+         */
+        @JavascriptInterface
+        fun lastLog(): String {{
+            return try {{
+                val cmd = arrayOf("logcat", "-d", "-t", "400", "-v", "brief",
+                                  "-s", "GoLog,com.v2ray.ang,AndroidRuntime,System.err")
+                val proc = Runtime.getRuntime().exec(cmd)
+                val lines = proc.inputStream.bufferedReader().use {{ it.readLines() }}
+                val interesting = lines.filter {{ l ->
+                    val t = l.lowercase()
+                    t.contains("fail") || t.contains("error") || t.contains("invalid") ||
+                    t.contains("refused") || t.contains("timeout") || t.contains("panic") ||
+                    t.contains("unable")
+                }}
+                val pick = if (interesting.isNotEmpty()) interesting else lines
+                pick.takeLast(6).joinToString(" | ").take(600)
+            }} catch (e: Exception) {{
+                ""
+            }}
+        }}
+
         /** The upstream screens, for when something needs debugging. */
         @JavascriptInterface
         fun advanced() {{
@@ -498,7 +524,7 @@ print(f"  activity    : {os.path.relpath(path, app_dir)}")
 # app while everything still compiles. Fail the build instead.
 REQUIRED = ["version", "setConnected", "isConnected", "hasConfig", "importConfig",
             "scan", "paste", "biometric", "removeConfig", "listConfigs",
-            "selectConfig", "stats", "diagnostics", "advanced"]
+            "selectConfig", "stats", "diagnostics", "lastLog", "advanced"]
 written = open(path, encoding="utf-8").read()
 missing = [m for m in REQUIRED if f"fun {m}" not in written]
 if missing:
