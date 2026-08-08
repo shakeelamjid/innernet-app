@@ -126,11 +126,22 @@ class InnernetActivity : FragmentActivity() {{
                 Pair(0, 0)
             }}
             runOnUiThread {{
-                web.evaluateJavascript(
-                    "window.dispatchEvent(new CustomEvent('innernet:imported'," +
-                        "{{detail:{{count:$count}}}}))", null
-                )
-                if (count > 0) web.loadUrl(home)
+                // The config now lives in the tunnel engine, but the page tracks
+                // it separately — hand the same text to /m/claim so the session
+                // knows which config this phone is holding. Without this the
+                // scan appears to do nothing.
+                val js = StringBuilder()
+                    .append("(async()=>{{try{{")
+                    .append("const r=await fetch('/m/claim',{{method:'POST',")
+                    .append("headers:{{'Content-Type':'application/x-www-form-urlencoded'}},")
+                    .append("body:'text='+encodeURIComponent(")
+                    .append(org.json.JSONObject.quote(text))
+                    .append(")}});")
+                    .append("const j=await r.json();")
+                    .append("location.href=j.ok?j.next:'/m/add';")
+                    .append("}}catch(e){{location.href='/m/add';}}}})()")
+                    .toString()
+                web.evaluateJavascript(js, null)
             }}
         }}
     }}
