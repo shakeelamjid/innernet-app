@@ -32,8 +32,12 @@ say "app module : $APP_DIR"
 # ---------------------------------------------------------------- identity
 OLD_ID="$(grep -oE 'applicationId[[:space:]]*=?[[:space:]]*"[^"]+"' "$GRADLE" | head -1 | grep -oE '"[^"]+"' | tr -d '"')"
 [ -n "$OLD_ID" ] || fail "Could not read the existing applicationId"
-sed -i "s|\"$OLD_ID\"|\"$APP_ID\"|" "$GRADLE"
-say "app id     : $OLD_ID -> $APP_ID"
+# Only the applicationId — NOT `namespace`. Namespace is the code package that
+# every Kotlin file declares; changing it breaks the build.
+sed -i -E "s|(applicationId[[:space:]]*=?[[:space:]]*)\"$OLD_ID\"|\1\"$APP_ID\"|" "$GRADLE"
+grep -q "applicationId.*\"$APP_ID\"" "$GRADLE" || fail "applicationId was not rewritten"
+grep -q "namespace.*\"$OLD_ID\"" "$GRADLE" || say "note       : upstream namespace differs from the old id (fine)"
+say "app id     : $OLD_ID -> $APP_ID  (namespace left untouched)"
 
 # app_name across every locale that defines it
 CHANGED=0

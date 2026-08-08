@@ -105,8 +105,25 @@ Re-run the workflow — it always clones the newest v2rayNG, so upstream fixes c
 free. Before shipping an update, raise `versionCode` and `versionName` in
 `upstream/V2rayNG/app/build.gradle.kts`, and always sign with the **same** keystore.
 
+## Why the build takes ~15 minutes
+
+v2rayNG is not a plain Gradle project. The workflow has to fetch two git
+submodules, install a specific NDK, compile a native tunnel library from C
+source, and download the matching Xray core `.aar` before Gradle can even start.
+That is all automatic — it just isn't fast. Later runs are quicker.
+
 ## If a build fails
 
-Open the failed run and read the red step. The most common causes are a mistyped
-secret name, or `brand.sh` stopping on purpose because upstream moved a file — it
-is written to fail loudly rather than quietly ship an app still called v2rayNG.
+Open the failed run and click the red step. Common causes:
+
+- **A mistyped secret name.** They must be exactly `KEYSTORE_B64`,
+  `KEYSTORE_PASSWORD`, `KEY_ALIAS`.
+- **`brand.sh` stopped on purpose.** It fails loudly when upstream moves a file,
+  rather than quietly shipping an app still called v2rayNG. The message says
+  which step it could not complete.
+- **Native build errors** in "Build the native tunnel library" usually mean
+  upstream changed the NDK version. Compare `NDK_VERSION` at the top of the
+  workflow with the one in upstream's own `.github/workflows/build.yml`.
+
+Paste the red step's name and the last few lines of its log and it can be
+diagnosed from that.

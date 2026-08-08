@@ -28,6 +28,24 @@ installed, the page falls back to `hiddify://` automatically.
 
 ---
 
+## What the build actually needs
+
+v2rayNG is not a plain Gradle project, and a naive `gradlew assembleRelease`
+fails. The workflow mirrors upstream's own build:
+
+1. clone **with submodules** (`AndroidLibXrayLite`, `hev-socks5-tunnel`)
+2. install **NDK 29.0.14206865** and pin `ndkVersion` in the Gradle file
+3. compile the native tunnel library via `compile-hevtun.sh`
+4. download **`libv2ray.aar`** from the AndroidLibXrayLite release matching the
+   submodule's tag
+5. write `local.properties`, run the licence report task, then build
+
+Roughly 15 minutes on a clean run.
+
+> `brand.sh` deliberately changes **`applicationId` only, never `namespace`**.
+> Namespace is the code package every Kotlin file declares; rewriting it breaks
+> compilation.
+
 ## Building it
 
 ### 1. Put this folder in its own GitHub repo
