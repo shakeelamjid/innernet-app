@@ -1,5 +1,8 @@
 name: Build Innernet APK
 
+# Mirrors upstream v2rayNG's own build, which needs more than a plain gradle run:
+# git submodules, a specific NDK, a natively compiled tunnel library, and a
+# prebuilt Xray .aar downloaded from a matching release.
 on:
   workflow_dispatch:
   push:
@@ -9,15 +12,25 @@ on:
 permissions:
   contents: write
 
+env:
+  NDK_VERSION: '29.0.14206865'
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    # `secrets` cannot be used in a step-level `if`, so surface it as env here.
+    env:
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_B64 != '' }}
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
-      - name: Fetch v2rayNG
-        run: git clone --depth 1 https://github.com/2dust/v2rayNG upstream
+      # Submodules are required: AndroidLibXrayLite supplies the Xray core tag,
+      # hev-socks5-tunnel is compiled into the native tunnel library.
+      - name: Fetch v2rayNG with submodules
+        run: |
+          git clone --recurse-submodules https://github.com/2dust/v2rayNG upstream
+          cd upstream/AndroidLibXrayLite && git fetch --tags --force
 
       - name: Apply Innernet branding
         env:
@@ -26,55 +39,81 @@ jobs:
           chmod +x brand.sh
           ./brand.sh
 
-      - name: Set up JDK
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          log-accepted-android-sdk-licenses: false
+          packages: 'platforms;android-37 build-tools;37.0.0 platform-tools'
 
-      - name: Locate the Gradle project
-        id: proj
+      - name: Install NDK and pin it in Gradle
+        working-directory: upstream
         run: |
-          DIR="$(dirname "$(find upstream -name 'gradlew' | head -1)")"
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Gradle project: $DIR"
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --channel=0 --install "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          # declare the ndkVersion inside the android { } block
+          sed -i "0,/compileSdk/s//ndkVersion = \"${NDK_VERSION}\"\n    compileSdk/" \
+            V2rayNG/app/build.gradle.kts
+          grep -n 'ndkVersion' V2rayNG/app/build.gradle.kts
 
-      - name: Build release APK
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+      - name: Build the native tunnel library
+        working-directory: upstream
+        run: bash compile-hevtun.sh
 
-      - name: Sign the APK
-        if: ${{ env.KEYSTORE_B64 != '' }}
-        env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-        working-directory: ${{ steps.proj.outputs.dir }}
+      - name: Copy the native library into the app
+        working-directory: upstream
+        run: cp -r libs V2rayNG/app/
+
+      - name: Work out which Xray core to fetch
+        working-directory: upstream/AndroidLibXrayLite
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > innernet.keystore
-          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
-          for apk in $(find . -name '*-release-unsigned.apk' -o -name '*-release.apk' | grep -v signed); do
-            out="innernet-$(basename "$apk" | sed 's/-unsigned//')"
-            "$BT/zipalign" -p -f 4 "$apk" "aligned.apk"
-            "$BT/apksigner" sign \
-              --ks innernet.keystore \
-              --ks-pass "pass:$KEYSTORE_PASSWORD" \
-              --ks-key-alias "$KEY_ALIAS" \
-              --out "$out" aligned.apk
-            "$BT/apksigner" verify "$out" && echo "signed: $out"
-          done
-          rm -f innernet.keystore aligned.apk
+          TAG="$(git describe --tags --abbrev=0)"
+          echo "Xray core tag: $TAG"
+          echo "XRAY_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Download libv2ray.aar
+        uses: robinraju/release-downloader@v1.13
+        with:
+          repository: '2dust/AndroidLibXrayLite'
+          tag: ${{ env.XRAY_TAG }}
+          fileName: 'libv2ray.aar'
+          out-file-path: upstream/V2rayNG/app/libs/
+
+      - name: Decode the signing keystore
+        if: env.HAS_KEYSTORE == 'true'
+        id: keystore
+        uses: timheuer/base64-to-file@v2.0.0
+        with:
+          fileName: 'innernet.keystore'
+          encodedString: ${{ secrets.KEYSTORE_B64 }}
+
+      - name: Build the APK
+        working-directory: upstream/V2rayNG
+        run: |
+          echo "sdk.dir=${ANDROID_HOME}" > local.properties
+          chmod 755 gradlew
+          ./gradlew licenseFdroidReleaseReport --no-daemon
+          if [ -n "${{ steps.keystore.outputs.filePath }}" ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace \
+              -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.filePath }} \
+              -Pandroid.injected.signing.store.password='${{ secrets.KEYSTORE_PASSWORD }}' \
+              -Pandroid.injected.signing.key.alias='${{ secrets.KEY_ALIAS }}' \
+              -Pandroid.injected.signing.key.password='${{ secrets.KEYSTORE_PASSWORD }}'
+          else
+            echo "No keystore secret set — building UNSIGNED (will not install on a phone)."
+            ./gradlew assembleRelease --no-daemon --stacktrace
+          fi
 
       - name: Collect the APKs
         run: |
           mkdir -p out
-          find ${{ steps.proj.outputs.dir }} -name '*.apk' \
-               ! -path '*/intermediates/*' -exec cp {} out/ \;
+          find upstream/V2rayNG/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
           ls -lh out/
 
       - name: Upload as a build artifact
@@ -84,8 +123,8 @@ jobs:
           path: out/*.apk
           retention-days: 30
 
-      - name: Publish release
-        if: github.ref == 'refs/heads/main'
+      - name: Publish a release
+        if: ${{ github.ref == 'refs/heads/main' && env.HAS_KEYSTORE == 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
