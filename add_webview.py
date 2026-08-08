@@ -103,6 +103,9 @@ class InnernetActivity : FragmentActivity() {{
         // The server uses this to serve the in-app pages rather than the
         // marketing site, even if a link leads out of /m.
         web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/1.0"
+        // never show a stale screen after the panel is redeployed
+        web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        web.clearCache(true)
         web.webViewClient = object : WebViewClient() {{
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean {{
                 val u = url ?: return false
