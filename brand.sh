@@ -27,7 +27,11 @@ GRADLE="$(grep -rl --include='build.gradle*' 'applicationId' "$SRC" | head -1 ||
 APP_DIR="$(dirname "$GRADLE")"
 RES_DIR="$APP_DIR/src/main/res"
 [ -d "$RES_DIR" ] || fail "No res/ directory at $RES_DIR"
+# Build flavours (fdroid, dev, pre_release...) keep their own res/ and override
+# app_name. Branding only src/main leaves those variants named v2rayNG.
+SRC_DIR="$APP_DIR/src"
 say "app module : $APP_DIR"
+say "source sets: $(ls "$SRC_DIR" | tr '\n' ' ')"
 
 # ---------------------------------------------------------------- identity
 OLD_ID="$(grep -oE 'applicationId[[:space:]]*=?[[:space:]]*"[^"]+"' "$GRADLE" | head -1 | grep -oE '"[^"]+"' | tr -d '"')"
@@ -41,13 +45,20 @@ say "app id     : $OLD_ID -> $APP_ID  (namespace left untouched)"
 
 # app_name across every locale that defines it
 CHANGED=0
+# every source set, not just main — and both <string> and <item type="string">
 while IFS= read -r f; do
-    # the tag may carry attributes, e.g. translatable="false"
     sed -i -E "s|(<string name=\"app_name\"[^>]*>)[^<]*(</string>)|\1${APP_NAME}\2|" "$f"
+    sed -i -E "s|(<item name=\"app_name\"[^>]*>)[^<]*(</item>)|\1${APP_NAME}\2|" "$f"
     CHANGED=$((CHANGED+1))
-done < <(grep -rlE '<string name="app_name"[^>]*>' "$RES_DIR" || true)
-[ "$CHANGED" -gt 0 ] || fail "No strings.xml declared app_name — nothing was renamed"
-say "app name   : $APP_NAME  (in $CHANGED file(s))"
+done < <(grep -rlE '(<string|<item) name="app_name"' "$SRC_DIR" || true)
+[ "$CHANGED" -gt 0 ] || fail "Nothing declared app_name — nothing was renamed"
+say "app name   : $APP_NAME  (in $CHANGED file(s) across all source sets)"
+# prove no variant kept the old name (check the app_name line only — other
+# strings legitimately mention v2rayNG in help text)
+LEFT="$(grep -rhE '(<string|<item) name="app_name"' "$SRC_DIR" | grep -v ">${APP_NAME}<" || true)"
+[ -z "$LEFT" ] || fail "an app_name was not renamed:
+$LEFT"
+say "verified   : every app_name now reads $APP_NAME"
 
 # ---------------------------------------------------------------- icons
 ICONS=0
@@ -64,7 +75,21 @@ done
 rm -rf "$RES_DIR"/mipmap-anydpi-v26 2>/dev/null || true
 say "icons      : $ICONS file(s) replaced, adaptive icons removed"
 
-python3 "$(dirname "$0")/fix_shortcuts.py" "$RES_DIR" "$OLD_ID" "$APP_ID" "$SITE_URL" "$BUY_LABEL"
+python3 "$(dirname "$0")/fix_shortcuts.py" "$RES_DIR" "$SRC_DIR" "$OLD_ID" "$APP_ID" "$SITE_URL" "$BUY_LABEL"
+
+# ------------------------------------------------------------ size shrinking
+# Upstream ships with minification disabled. Turning it on strips unused Kotlin
+# and Compose code — typically a few MB. It is OPT-IN because upstream does not
+# test with it: R8 can break reflection at runtime, and the failure shows up when
+# a user tries to connect, not at build time. Test any MINIFY=1 build properly.
+if [ "${MINIFY:-0}" = "1" ]; then
+    if grep -q 'isMinifyEnabled = false' "$GRADLE"; then
+        sed -i 's/isMinifyEnabled = false/isMinifyEnabled = true\n            isShrinkResources = true/' "$GRADLE"
+        say "shrinking  : R8 enabled (test this build carefully)"
+    fi
+else
+    say "shrinking  : off (set MINIFY=1 to try it)"
+fi
 
 # ---------------------------------------------------------------- colours
 mkdir -p "$RES_DIR/values"
@@ -108,5 +133,10 @@ PY
     grep -q "android:scheme=\"$SCHEME\"" "$MANIFEST" || fail "deep link was not written"
     say "deep link  : ${SCHEME}://import/... registered"
 fi
+
+# ------------------------------------------------------- the Innernet face
+# Without this the app is a rebranded v2rayNG showing its own engineer-facing
+# screens. This points it at the panel's /m pages and wires the native bridge.
+python3 "$(dirname "$0")/add_webview.py" "$APP_DIR" "${WEB_URL:-${SITE_URL%/buy}/m}" "$APP_ID"
 
 printf '\nBranding applied. Build with:\n  cd %s && ./gradlew assembleRelease\n' "$(dirname "$APP_DIR")"

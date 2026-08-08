@@ -127,3 +127,33 @@ Open the failed run and click the red step. Common causes:
 
 Paste the red step's name and the last few lines of its log and it can be
 diagnosed from that.
+
+---
+
+## Update: the app now shows *your* screens
+
+`add_webview.py` gives the fork an Innernet face — a WebView on
+`innernetcorp.com/m` plus a native bridge. After this, the interface lives on
+your server: change a screen, redeploy the panel, and every installed app shows
+it. No new APK, no reinstall.
+
+What the bridge does:
+
+| The page calls | The app does |
+|---|---|
+| `setConnected(true/false)` | starts or stops the tunnel |
+| `scan()` | opens the QR scanner, imports what it reads |
+| `paste()` | reads the clipboard, imports a config link |
+| `biometric(reason)` | fingerprint prompt for the operator panel |
+| `advanced()` | opens the original v2rayNG screens |
+
+It **fails the build** if upstream renames any of the functions it hooks into,
+rather than shipping an app whose buttons quietly do nothing.
+
+### To update the app repo
+
+1. Replace `brand.sh` with the new version
+2. Add `add_webview.py` as a new file
+3. Replace `.github/workflows/build-apk.yml`
+4. Actions → Build Innernet APK → Run workflow
+5. Install and check: the app opens the Innernet connect screen, not a config list

@@ -7,11 +7,11 @@ which is safer done with a parser-ish approach than with sed.
 import os
 import sys
 
-res_dir, old_id, new_id, site_url, buy_label = sys.argv[1:6]
+res_dir, src_dir, old_id, new_id, site_url, buy_label = sys.argv[1:7]
 
 # --- 1. resources that hard-code the old package (shortcuts, widgets) ---------
 repointed = 0
-for root, _dirs, files in os.walk(res_dir):
+for root, _dirs, files in os.walk(src_dir):   # every source set, not just main
     for name in files:
         if not name.endswith(".xml"):
             continue
