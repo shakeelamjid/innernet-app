@@ -43,7 +43,14 @@ def find(pattern, where, label):
 
 find(r"object LauncherManager", java_root, "LauncherManager")
 find(r"fun\s+startService", java_root, "LauncherManager.startService")
-find(r"object CoreServiceManager|fun isRunning", java_root, "CoreServiceManager.isRunning")
+find(r"object CoreServiceManager", java_root, "CoreServiceManager")
+find(r"fun isRunning", java_root, "CoreServiceManager.isRunning")
+find(r"fun getSelectServer", java_root, "MmkvManager.getSelectServer")
+find(r"fun setSelectServer", java_root, "MmkvManager.setSelectServer")
+find(r"fun decodeServerList", java_root, "MmkvManager.decodeServerList")
+find(r"fun removeServer\b", java_root, "MmkvManager.removeServer")
+find(r"fun stopService", java_root, "LauncherManager.stopService")
+find(r"fun removeServer", java_root, "MmkvManager.removeServer")
 find(r"class ScannerActivity", java_root, "ScannerActivity")
 find(r"fun importBatchConfig", java_root, "AngConfigManager.importBatchConfig")
 print("  preflight   : every upstream hook the bridge needs is present")
@@ -71,6 +78,8 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.AngConfigManager
+import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.ui.ScannerActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +93,16 @@ class InnernetActivity : FragmentActivity() {{
 
     private lateinit var web: WebView
     private val home = "{site_url}"
+
+    private val vpnConsent = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {{ result ->
+        // Android asks the customer to allow a VPN. Without this the service
+        // silently never starts, and the page happily shows a green light.
+        val granted = result.resultCode == Activity.RESULT_OK
+        if (granted) LauncherManager.startService(this)
+        pushState(granted)
+    }}
 
     private val scanner = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -142,7 +161,25 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
         web.addJavascriptInterface(Bridge(), "Innernet")
-        web.loadUrl(if (savedInstanceState == null) home else web.url ?: home)
+        // A cache-buster on the first load guarantees a fresh page after a
+        // redeploy, even if something between us and the server caches.
+        val fresh = home + (if (home.contains("?")) "&" else "?") + "b=" + System.currentTimeMillis()
+        web.loadUrl(if (savedInstanceState == null) fresh else web.url ?: fresh)
+    }}
+
+    /** Push the service's actual state into the page. */
+    private fun pushState(running: Boolean) {{
+        web.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('innernet:state'," +
+                "{{detail:{{connected:$running}}}}))", null
+        )
+    }}
+
+    override fun onResume() {{
+        super.onResume()
+        // coming back from another app must show what is actually happening,
+        // not whatever the page last animated
+        if (::web.isInitialized) pushState(CoreServiceManager.isRunning())
     }}
 
     override fun onBackPressed() {{
@@ -156,6 +193,13 @@ class InnernetActivity : FragmentActivity() {{
                 AngConfigManager.importBatchConfig(text, "", false)
             }} catch (e: Exception) {{
                 Pair(0, 0)
+            }}
+            // Importing does not select. Without this the tunnel has nothing to
+            // start and the connect button fails for no visible reason.
+            if (count > 0) {{
+                try {{
+                    MmkvManager.decodeServerList("").firstOrNull()?.let {{ MmkvManager.setSelectServer(it) }}
+                }} catch (e: Exception) {{ /* selection is best effort */ }}
             }}
             runOnUiThread {{
                 // The config now lives in the tunnel engine, but the page tracks
@@ -185,14 +229,52 @@ class InnernetActivity : FragmentActivity() {{
         @JavascriptInterface
         fun version(): Int = 2
 
-        /** Start or stop the tunnel. Returns whether the app is now connected. */
+        /** Start or stop the tunnel.
+         *
+         *  Returns false when it could not be started — no config chosen, or the
+         *  customer has not yet allowed a VPN. The page must never claim to be
+         *  connected on the strength of a tap alone.
+         */
         @JavascriptInterface
         fun setConnected(on: Boolean): Boolean {{
-            runOnUiThread {{
-                if (on) LauncherManager.startService(this@InnernetActivity)
-                else LauncherManager.stopService(this@InnernetActivity)
+            if (!on) {{
+                runOnUiThread {{
+                    LauncherManager.stopService(this@InnernetActivity)
+                    pushState(false)
+                }}
+                return false
             }}
-            return on
+            if (MmkvManager.getSelectServer().isNullOrEmpty()) return false
+            runOnUiThread {{
+                val consent = android.net.VpnService.prepare(this@InnernetActivity)
+                if (consent == null) {{
+                    LauncherManager.startService(this@InnernetActivity)
+                    pushState(true)
+                }} else {{
+                    vpnConsent.launch(consent)     // result handled above
+                }}
+            }}
+            return true
+        }}
+
+        /** The truth, asked of the service rather than remembered by the page. */
+        @JavascriptInterface
+        fun isConnected(): Boolean = CoreServiceManager.isRunning()
+
+        /** Is there anything to connect with? */
+        @JavascriptInterface
+        fun hasConfig(): Boolean = !MmkvManager.getSelectServer().isNullOrEmpty()
+
+        /** Remove the stored connection from this phone. */
+        @JavascriptInterface
+        fun forgetConfig(): Boolean {{
+            return try {{
+                runOnUiThread {{ LauncherManager.stopService(this@InnernetActivity) }}
+                MmkvManager.decodeServerList("").forEach {{ MmkvManager.removeServer(it) }}
+                true
+            }} catch (e: Exception) {{
+                false
+            }}
         }}
 
         @JavascriptInterface
@@ -242,6 +324,28 @@ class InnernetActivity : FragmentActivity() {{
             }}
             done.await(60, java.util.concurrent.TimeUnit.SECONDS)
             return okRef.get()
+        }}
+
+        /** Take the current config off this phone.
+         *
+         *  Stops the tunnel first — deleting the config a running service is
+         *  using leaves it connected to something that no longer exists.
+         */
+        @JavascriptInterface
+        fun removeConfig(): Boolean {{
+            return try {{
+                val guid = MmkvManager.getSelectServer()
+                runOnUiThread {{
+                    if (CoreServiceManager.isRunning()) {{
+                        LauncherManager.stopService(this@InnernetActivity)
+                    }}
+                    if (!guid.isNullOrEmpty()) MmkvManager.removeServer(guid)
+                    pushState(false)
+                }}
+                true
+            }} catch (e: Exception) {{
+                false
+            }}
         }}
 
         /** The upstream screens, for when something needs debugging. */
