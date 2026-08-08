@@ -206,6 +206,8 @@ class InnernetActivity : FragmentActivity() {{
     /** Push a scanned or pasted config into the app, then tell the page. */
     private fun handOff(text: String) {{
         CoroutineScope(Dispatchers.IO).launch {{
+            val beforeImport = try {{ MmkvManager.decodeServerList("").toSet() }}
+                               catch (e: Exception) {{ emptySet<String>() }}
             val (count, _) = try {{
                 AngConfigManager.importBatchConfig(text, "", false)
             }} catch (e: Exception) {{
@@ -215,7 +217,9 @@ class InnernetActivity : FragmentActivity() {{
             // start and the connect button fails for no visible reason.
             if (count > 0) {{
                 try {{
-                    MmkvManager.decodeServerList("").firstOrNull()?.let {{ MmkvManager.setSelectServer(it) }}
+                    val after = MmkvManager.decodeServerList("")
+                    val added = after.firstOrNull {{ it !in beforeImport }} ?: after.lastOrNull()
+                    added?.let {{ MmkvManager.setSelectServer(it) }}
                 }} catch (e: Exception) {{ /* selection is best effort */ }}
             }}
             runOnUiThread {{
@@ -300,10 +304,13 @@ class InnernetActivity : FragmentActivity() {{
         @JavascriptInterface
         fun importConfig(text: String): Boolean {{
             return try {{
+                val before = MmkvManager.decodeServerList("").toSet()
                 val (count, _) = AngConfigManager.importBatchConfig(text, "", false)
                 if (count > 0) {{
-                    MmkvManager.decodeServerList("").firstOrNull()
-                        ?.let {{ MmkvManager.setSelectServer(it) }}
+                    // pick the one we just added, not whatever happens to be first
+                    val after = MmkvManager.decodeServerList("")
+                    val added = after.firstOrNull {{ it !in before }} ?: after.lastOrNull()
+                    added?.let {{ MmkvManager.setSelectServer(it) }}
                 }}
                 count > 0
             }} catch (e: Exception) {{
@@ -453,6 +460,25 @@ class InnernetActivity : FragmentActivity() {{
             }}
         }}
 
+        /** What the app thinks it is working with — shown when a start fails,
+         *  so "can't connect" stops being the end of the conversation. */
+        @JavascriptInterface
+        fun diagnostics(): String {{
+            return try {{
+                val guid = MmkvManager.getSelectServer().orEmpty()
+                val p = if (guid.isNotEmpty()) MmkvManager.decodeServerConfig(guid) else null
+                org.json.JSONObject()
+                    .put("configs", MmkvManager.decodeServerList("").size)
+                    .put("selected", p?.remarks ?: "(none)")
+                    .put("server", p?.server ?: "")
+                    .put("port", p?.serverPort ?: "")
+                    .put("running", CoreServiceManager.isRunning())
+                    .toString()
+            }} catch (e: Exception) {{
+                org.json.JSONObject().put("error", e.message ?: "unknown").toString()
+            }}
+        }}
+
         /** The upstream screens, for when something needs debugging. */
         @JavascriptInterface
         fun advanced() {{
@@ -472,7 +498,7 @@ print(f"  activity    : {os.path.relpath(path, app_dir)}")
 # app while everything still compiles. Fail the build instead.
 REQUIRED = ["version", "setConnected", "isConnected", "hasConfig", "importConfig",
             "scan", "paste", "biometric", "removeConfig", "listConfigs",
-            "selectConfig", "stats", "advanced"]
+            "selectConfig", "stats", "diagnostics", "advanced"]
 written = open(path, encoding="utf-8").read()
 missing = [m for m in REQUIRED if f"fun {m}" not in written]
 if missing:
