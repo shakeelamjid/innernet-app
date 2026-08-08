@@ -100,13 +100,36 @@ class InnernetActivity : FragmentActivity() {{
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.databaseEnabled = true
+        // The server uses this to serve the in-app pages rather than the
+        // marketing site, even if a link leads out of /m.
+        web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/1.0"
         web.webViewClient = object : WebViewClient() {{
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean {{
-                // keep our own pages inside; send anything else to the browser
                 val u = url ?: return false
-                if (u.startsWith(home.substringBefore("/m"))) return false
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
-                return true
+                val site = home.substringBefore("/m")
+                if (u.startsWith(site)) return false          // our own pages stay inside
+                if (u.startsWith("http")) {{                    // anything else opens outside
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
+                    return true
+                }}
+                return false
+            }}
+
+            override fun onReceivedError(
+                v: WebView?, req: android.webkit.WebResourceRequest?,
+                err: android.webkit.WebResourceError?
+            ) {{
+                // a blank screen tells the customer nothing; say what happened
+                if (req?.isForMainFrame == true) {{
+                    v?.loadData(
+                        "<body style='background:#09090b;color:#fafafa;font-family:sans-serif;" +
+                            "display:flex;align-items:center;justify-content:center;height:100vh;" +
+                            "margin:0;text-align:center;padding:24px'><div>" +
+                            "<p style='font-size:16px'>Can't reach Innernet</p>" +
+                            "<p style='font-size:13px;color:#8b8b93'>Check your connection and try again.</p>" +
+                            "</div></body>", "text/html; charset=utf-8", null
+                    )
+                }}
             }}
         }}
         web.addJavascriptInterface(Bridge(), "Innernet")
