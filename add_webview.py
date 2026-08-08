@@ -56,6 +56,7 @@ find(r"MSG_STATE_START_SUCCESS", java_root, "AppConfig.MSG_STATE_START_SUCCESS")
 find(r"MSG_STATE_NOT_RUNNING", java_root, "AppConfig.MSG_STATE_NOT_RUNNING")
 find(r"BROADCAST_ACTION_ACTIVITY", java_root, "AppConfig.BROADCAST_ACTION_ACTIVITY")
 find(r"fun sendMsg2Service", java_root, "MessageHelper.sendMsg2Service")
+find(r"fun initAssets", java_root, "SettingsManager.initAssets")
 find(r"fun removeServer", java_root, "MmkvManager.removeServer")
 find(r"class ScannerActivity", java_root, "ScannerActivity")
 find(r"fun importBatchConfig", java_root, "AngConfigManager.importBatchConfig")
@@ -189,6 +190,18 @@ class InnernetActivity : FragmentActivity() {{
         }}
         web.addJavascriptInterface(Bridge(), "Innernet")
 
+        // The core needs its geo data files present before it can start. Upstream
+        // does this from MainActivity, which is no longer the launcher, so nothing
+        // was doing it — the core initialised and stopped without a word.
+        CoroutineScope(Dispatchers.IO).launch {{
+            try {{
+                com.v2ray.ang.handler.SettingsManager.initAssets(
+                    applicationContext, applicationContext.assets)
+            }} catch (e: Exception) {{
+                android.util.Log.e("Innernet", "initAssets failed", e)
+            }}
+        }}
+
         stateReceiver = object : android.content.BroadcastReceiver() {{
             override fun onReceive(ctx: Context?, intent: Intent?) {{
                 when (intent?.getIntExtra("key", 0)) {{
@@ -295,7 +308,7 @@ class InnernetActivity : FragmentActivity() {{
          *  page can tell whether the installed app is current. Without this,
          *  testing a server fix against an old APK looks like the fix failed. */
         @JavascriptInterface
-        fun version(): Int = 6
+        fun version(): Int = 7
 
         /** Start or stop the tunnel.
          *
