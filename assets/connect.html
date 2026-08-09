@@ -356,7 +356,7 @@
     // compatibility marker that stays put across releases, so showing it made a
     // freshly updated app look stale. The shell puts the build in its UA.
     var m = /InnernetApp\/([0-9.]+)/.exec(navigator.userAgent || "");
-    el.textContent = m ? ("Innernet " + m[1]) : "";
+    el.textContent = m ? ("App version " + m[1]) : "";
   }
 
   function refresh(){ readConfigs(); drawConfigs(); truth(); stamp(); probe(); }
