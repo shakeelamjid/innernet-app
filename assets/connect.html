@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<!--
+  Innernet — LOCAL connect screen.
+
+  Bundled inside the APK at app/src/main/assets/connect.html and made the
+  launch page. Everything on the critical path (see held connections, pick one,
+  connect, disconnect, see status, scan/paste a new one, remove one) is driven
+  entirely by the window.Innernet bridge — ZERO network. It therefore works:
+    • with no internet at all (no more blank "can't reach" dead-end), and
+    • when innernetcorp.com is BLOCKED by a censor — which is the case that
+      matters, because the config already lives in the tunnel engine and the
+      moment the tunnel is up it unblocks the site itself.
+
+  Managing a plan (buy / renew / see quota) genuinely needs the network, so
+  those are links out to the server pages. When the site is blocked they won't
+  open until the tunnel is up — which is exactly the bootstrap this screen
+  enables, and the copy says so.
+
+  It uses only the v7 bridge surface, so it drops into the next build with no
+  bridge-method change. SITE is templated in by the build (brand.sh / add_webview).
+-->
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#09090b">
+<title>Innernet</title>
+<style>
+  :root{--bg:#09090b;--card:#141416;--bd:#232327;--ink:#fafafa;--mut:#8b8b93;--dim:#5f5f66;
+    --acc:#17e6c9;--acc-deep:#0c9c88;--acc-ink:#04211d;--red:#f87171;--amber:#fbbf24}
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);
+    font:15px/1.5 -apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
+    display:flex;flex-direction:column;overflow:hidden;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  a{color:inherit;text-decoration:none}
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex:none}
+  .mk{display:flex;align-items:center;gap:8px;font-weight:650;font-size:16px;letter-spacing:-.02em}
+  .mk svg{width:20px;height:20px;color:var(--acc)}
+  .chip{font-size:12px;color:var(--mut);border:1px solid var(--bd);border-radius:999px;padding:5px 11px}
+  main{flex:1;display:flex;flex-direction:column;padding:0 18px;min-height:0;overflow-y:auto}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;min-height:340px}
+  .dial{position:relative;width:236px;height:236px;display:grid;place-items:center;background:none;border:0;padding:0;cursor:pointer}
+  .brk{position:absolute;width:34px;height:34px;border:3px solid var(--bd);border-radius:4px;transition:.35s}
+  .brk.tl{top:0;left:0;border-right:0;border-bottom:0}.brk.tr{top:0;right:0;border-left:0;border-bottom:0}
+  .brk.bl{bottom:0;left:0;border-right:0;border-top:0}.brk.br{bottom:0;right:0;border-left:0;border-top:0}
+  .on .brk{border-color:#2a2a2e}
+  .ring{position:absolute;inset:26px;border-radius:50%;border:1px solid var(--bd);transition:.35s}
+  .on .ring{border-color:rgba(23,230,201,.18)}
+  .mark{width:104px;height:104px;color:#3f3f46;transition:.35s}.mark svg{width:100%;height:100%}
+  .on .mark{color:var(--acc);filter:drop-shadow(0 0 10px rgba(23,230,201,.55)) drop-shadow(0 0 28px rgba(23,230,201,.28))}
+  .on .mark svg{animation:pulse 3.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.18)}}
+  .state{text-align:center}
+  .state .s{font-size:21px;font-weight:650;letter-spacing:-.02em}
+  .state .h{font-size:13px;color:var(--mut);margin-top:4px}
+  .on .state .s{color:var(--acc)}
+  #why{display:none;text-align:center;font-size:11.5px;color:var(--dim);margin-top:2px;padding:0 20px;line-height:1.6}
+  #why pre{margin-top:8px;font-size:10.5px;color:var(--mut);text-align:start;background:#0c0c0e;
+    border:1px solid var(--bd);border-radius:8px;padding:9px;max-height:120px;overflow:auto;
+    white-space:pre-wrap;word-break:break-word}
+  .plan{width:100%;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px 16px}
+  .plan .nm{font-size:14px;font-weight:600}
+  .plan select{width:100%;background:transparent;border:0;color:var(--ink);font:inherit;font-size:14px;font-weight:600;
+    padding:0 20px 0 0;appearance:none;cursor:pointer;
+    background-image:url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right center;background-size:16px}
+  .plan select:focus{outline:none}.plan select option{background:#141416;color:var(--ink)}
+  .actions{display:flex;gap:8px;width:100%;margin-top:2px}
+  .btn{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--bd);
+    border-radius:12px;padding:13px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;
+    background:transparent;color:var(--ink)}
+  .btn svg{width:17px;height:17px}
+  .btn.primary{background:var(--acc);color:var(--acc-ink);border-color:var(--acc)}
+  .manage{width:100%;display:flex;gap:8px;margin-top:2px}
+  .manage a{flex:1;text-align:center;border:1px solid var(--bd);border-radius:11px;padding:11px;
+    font-size:12.5px;color:var(--mut)}
+  .hint{width:100%;font-size:11px;color:var(--dim);text-align:center;line-height:1.5;padding:0 6px}
+  .banner{display:none;margin:0 18px 8px;background:#1e1808;border:1px solid #3a3116;color:var(--amber);
+    border-radius:10px;padding:11px 13px;font-size:12.5px;flex:none;align-items:center;justify-content:space-between;gap:10px}
+  .banner a{color:var(--acc);font-weight:600;white-space:nowrap}
+  .empty{width:100%;text-align:center;color:var(--mut);font-size:13.5px;line-height:1.6}
+  .stamp{text-align:center;font-size:10px;color:var(--dim);padding:2px 0 6px;flex:none}
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="mk"><svg viewBox="0 0 240 240" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"><line x1="88.9" y1="26.3" x2="88.9" y2="212.7"/><line x1="119.3" y1="8.1" x2="120.3" y2="230.9"/><line x1="57.5" y1="45.6" x2="216.5" y2="140.8"/><line x1="215.5" y1="63.8" x2="24.1" y2="174.2"/><line x1="211.5" y1="180.3" x2="125.4" y2="229.9"/><line x1="92.0" y1="25.3" x2="217.5" y2="101.3"/><line x1="54.5" y1="45.6" x2="54.5" y2="192.4"/><line x1="21.1" y1="66.8" x2="21.1" y2="172.2"/><line x1="28.2" y1="66.8" x2="215.5" y2="175.2"/><line x1="218.5" y1="65.8" x2="218.5" y2="173.2"/></svg>Innernet</span>
+  <span class="chip" id="netchip">·</span>
+</div>
+
+<div class="banner" id="updateBanner">
+  <span id="updateText">A newer version of the app is available.</span>
+  <a id="updateLink" href="#">Update →</a>
+</div>
+
+<main>
+  <div class="stage" id="stage">
+    <button class="dial" id="dial" aria-label="Connect">
+      <span class="brk tl"></span><span class="brk tr"></span><span class="brk bl"></span><span class="brk br"></span>
+      <span class="ring"></span>
+      <span class="mark"><svg viewBox="0 0 240 240" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"><line x1="88.9" y1="26.3" x2="88.9" y2="212.7"/><line x1="119.3" y1="8.1" x2="120.3" y2="230.9"/><line x1="57.5" y1="45.6" x2="216.5" y2="140.8"/><line x1="215.5" y1="63.8" x2="24.1" y2="174.2"/><line x1="211.5" y1="180.3" x2="125.4" y2="229.9"/><line x1="216.5" y1="142.8" x2="90.9" y2="213.7"/><line x1="92.0" y1="25.3" x2="217.5" y2="101.3"/><line x1="54.5" y1="45.6" x2="54.5" y2="192.4"/><line x1="21.1" y1="66.8" x2="21.1" y2="172.2"/><line x1="125.4" y1="9.1" x2="213.5" y2="59.7"/><line x1="115.3" y1="9.1" x2="26.1" y2="60.8"/><line x1="28.2" y1="66.8" x2="215.5" y2="175.2"/><line x1="216.5" y1="103.3" x2="56.5" y2="193.4"/><line x1="218.5" y1="65.8" x2="218.5" y2="173.2"/><line x1="26.1" y1="178.2" x2="114.2" y2="229.9"/></svg></span>
+    </button>
+
+    <div id="why"></div>
+
+    <div class="state">
+      <div class="s" id="stateText">Tap to connect</div>
+      <div class="h" id="stateHint">Not connected</div>
+    </div>
+
+    <div class="plan" id="planBox" style="display:none">
+      <select id="pick" aria-label="Which connection"></select>
+    </div>
+
+    <div class="actions" id="addActions">
+      <button class="btn" id="scanBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M7 12h10"/></svg>Scan</button>
+      <button class="btn" id="pasteBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>Paste</button>
+      <button class="btn" id="removeBtn" style="display:none;color:var(--red);border-color:#3a2626">Remove</button>
+    </div>
+
+    <div class="manage" id="manage">
+      <a id="mBuy" href="#">Buy</a>
+      <a id="mRenew" href="#">Renew</a>
+      <a id="mAccount" href="#">My plan</a>
+    </div>
+    <div class="hint" id="manageHint"></div>
+  </div>
+</main>
+
+<div class="stamp" id="stamp"></div>
+
+<script>
+(function(){
+  // ---- where the server lives. Templated by the build; safe default. --------
+  var SITE = "%%SITE%%";
+  if (SITE.indexOf("%%") === 0) SITE = "https://innernetcorp.com";  // dev fallback
+  var M = SITE.replace(/\/+$/,"") + "/m";
+
+  var $ = function(id){ return document.getElementById(id); };
+  var stage=$("stage"), dial=$("dial"), txt=$("stateText"), hint=$("stateHint"), why=$("why");
+
+  // ---- the bridge may arrive AFTER this page's script (cold start), so never
+  //      cache a null; re-read live and wait for it. -------------------------
+  function bridge(){ return window.Innernet || null; }
+  var BR = bridge();
+
+  var T = {
+    off:"Tap to connect", on:"Connected", conn:"Connecting…",
+    offh:"Not connected", onh:"You're protected", allow:"Allow the VPN when asked",
+    failed:"Couldn't connect. Try again.", nocfg:"Nothing to connect with — add one below",
+    none_t:"No connection yet", none_h:"Scan a card or paste a link to begin"
+  };
+
+  var busy=false, failed=false;
+
+  function paint(isOn){
+    if(isOn){ failed=false; why.style.display="none"; }
+    stage.classList.toggle("on", !!isOn);
+    txt.textContent = isOn ? T.on : (hasAny() ? T.off : T.none_t);
+    if(failed && !isOn) return;                 // keep a failure + its reason visible
+    hint.textContent = isOn ? T.onh : (hasAny() ? T.offh : T.none_h);
+  }
+
+  // ---- held connections come straight from the engine — no network ----------
+  var CONFIGS = [];
+  function readConfigs(){
+    CONFIGS = [];
+    if(!BR || typeof BR.listConfigs !== "function") return;
+    try{ CONFIGS = JSON.parse(BR.listConfigs() || "[]") || []; }catch(e){ CONFIGS=[]; }
+  }
+  function hasAny(){ return CONFIGS.length > 0; }
+
+  function drawConfigs(){
+    readConfigs();
+    var planBox=$("planBox"), pick=$("pick"), removeBtn=$("removeBtn");
+    if(!hasAny()){
+      planBox.style.display="none"; removeBtn.style.display="none"; return;
+    }
+    removeBtn.style.display="";
+    if(CONFIGS.length > 1){
+      planBox.style.display="";
+      pick.innerHTML = CONFIGS.map(function(c){
+        var nm=(c.name||"").replace(/[<>&]/g,"");
+        return '<option value="'+c.id+'"'+(c.selected?" selected":"")+">"+nm+"</option>";
+      }).join("");
+    } else {
+      // one config: show its name, no dropdown clutter
+      planBox.style.display="";
+      var nm=(CONFIGS[0].name||"").replace(/[<>&]/g,"");
+      pick.outerHTML = '<div class="nm" id="pick">'+nm+"</div>";
+    }
+  }
+
+  // switching the selected config (restarts the tunnel if it's up — the bridge
+  // handles that). Pure bridge, no network.
+  document.addEventListener("change", function(e){
+    if(e.target && e.target.id==="pick" && BR && BR.selectConfig){
+      try{ BR.selectConfig(e.target.value); }catch(_){}
+      setTimeout(truth, 500);
+    }
+  });
+
+  // ---- the truth about connection state is the service, via the bridge ------
+  function truth(){
+    if(busy) return;
+    if(BR && typeof BR.isConnected === "function"){
+      try{ paint(BR.isConnected()); }catch(e){}
+    } else {
+      paint(false);
+    }
+  }
+
+  // the service pushes state on this event; believe it over any guess
+  window.addEventListener("innernet:state", function(e){
+    if(busy) return;
+    paint(e.detail && e.detail.connected);
+  });
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden) refresh(); });
+  window.addEventListener("pageshow", refresh);
+  setInterval(function(){ if(!document.hidden) truth(); }, 3000);
+
+  // resolve as soon as the service says it's up, or give up after ms
+  function waitForTunnel(ms){
+    return new Promise(function(resolve){
+      var deadline=Date.now()+ms, done=false;
+      function finish(v){ if(done) return; done=true;
+        window.removeEventListener("innernet:state", onState); clearInterval(poll); resolve(v); }
+      function onState(e){ if(e.detail && e.detail.connected) finish(true); }
+      window.addEventListener("innernet:state", onState);
+      var poll=setInterval(function(){
+        try{ if(BR && BR.isConnected && BR.isConnected()) return finish(true); }catch(e){}
+        if(Date.now()>deadline) finish(false);
+      }, 500);
+    });
+  }
+
+  function showWhy(){
+    if(!BR || typeof BR.diagnostics!=="function"){ why.style.display="none"; return; }
+    try{
+      var d=JSON.parse(BR.diagnostics()||"{}");
+      var msg = d.error ? d.error
+        : ("Using "+(d.selected||"—")+(d.server?" · "+d.server+":"+d.port:"")+" · "+d.configs+" saved");
+      if(!d.error){
+        var flags=[];
+        if(d.notifications===false) flags.push("notifications blocked");
+        if(d.vpnReady===false) flags.push("VPN permission missing");
+        if(flags.length) msg += " · " + flags.join(" · ");
+      }
+      why.textContent = msg; why.style.display="block";
+      if(typeof BR.lastLog==="function"){
+        try{ var lg=(BR.lastLog()||"").trim();
+          if(lg){ var pre=document.createElement("pre"); pre.textContent=lg; why.appendChild(pre); }
+        }catch(e){}
+      }
+    }catch(e){ why.style.display="none"; }
+  }
+
+  dial.onclick = async function(){
+    if(busy) return;
+    if(!BR){ BR = bridge(); }                    // may have arrived since load
+    if(!hasAny()){ $("scanBtn").focus(); return; }
+    if(!BR || typeof BR.setConnected!=="function"){ hint.textContent=T.failed; return; }
+    busy=true; failed=false; why.style.display="none";
+    var goingOn = !stage.classList.contains("on");
+    txt.textContent=T.conn; hint.textContent = goingOn ? T.allow : "";
+    try{
+      var started = await BR.setConnected(goingOn);
+      if(goingOn && started===false) throw new Error("nothing to start");
+      if(goingOn){
+        var ok = await waitForTunnel(25000);     // permission dialog + startup take real time
+        if(!ok) throw new Error("did not come up");
+        paint(true);
+      } else { paint(false); }
+    }catch(e){
+      paint(false); failed=true;
+      hint.textContent = (""+e.message).indexOf("nothing")>=0 ? T.nocfg : T.failed;
+      showWhy();
+    }
+    busy=false;
+  };
+
+  // ---- add / remove: all local, so it works even when the site is blocked ---
+  $("scanBtn").onclick = function(){ if(BR && BR.scan) try{ BR.scan(); }catch(e){} };
+  $("pasteBtn").onclick = function(){ if(BR && BR.paste) try{ BR.paste(); }catch(e){} };
+  $("removeBtn").onclick = function(){
+    if(!confirm("Remove this connection from this phone?")) return;
+    if(BR && BR.removeConfig){ try{ BR.removeConfig(); }catch(e){} }
+    setTimeout(function(){ drawConfigs(); truth(); }, 300);
+  };
+
+  // ---- manage-plan links go to the server; when the site is blocked they open
+  //      only once the tunnel is up. That's the bootstrap, and we say so. -----
+  $("mBuy").href = M + "/buy";
+  $("mRenew").href = M + "/renew";
+  $("mAccount").href = M + "/account";
+
+  // ---- online-only niceties: reachability chip + "newer app" banner. These
+  //      NEVER block anything; if the fetch fails (offline / blocked) we stay
+  //      silent and the connect screen is fully usable regardless. ------------
+  function probe(){
+    var chip=$("netchip");
+    // A HEAD to the version endpoint; timeout so a blocked site fails fast.
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function(){ ctrl.abort(); }, 3500) : null;
+    fetch(M.replace(/\/m$/,"") + "/app/min-version", {
+      cache:"no-store", signal: ctrl ? ctrl.signal : undefined
+    }).then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+      if(to) clearTimeout(to);
+      chip.textContent = "online"; chip.style.color="var(--acc)";
+      $("manageHint").textContent = "";
+      if(j && BR && typeof BR.version==="function"){
+        var have=0; try{ have=BR.version()|0; }catch(e){}
+        // build number lives in the UA the server reads; but a hard bridge gap
+        // (installed < required) is worth surfacing here too.
+        if(typeof j.required==="number" && have < j.required){
+          $("updateText").textContent = "Your app is out of date — update to keep connecting.";
+          $("updateLink").href = j.latest_url || (SITE + "/app");
+          $("updateBanner").style.display="flex";
+        } else if(j.build_newer){
+          $("updateText").textContent = "A newer version of the app is available.";
+          $("updateLink").href = j.latest_url || (SITE + "/app");
+          $("updateBanner").style.display="flex";
+        }
+      }
+    }).catch(function(){
+      if(to) clearTimeout(to);
+      chip.textContent = "offline"; chip.style.color="var(--dim)";
+      // the honest, useful nudge: the store is unreachable *until* you connect
+      $("manageHint").textContent =
+        "Can't reach the store right now. If it's blocked, tap Connect first — the tunnel opens it.";
+    });
+  }
+
+  // ---- version stamp (this build), always visible so a stale APK is obvious --
+  function stamp(){
+    var el=$("stamp"); if(!BR){ el.textContent=""; return; }
+    var v=0; try{ v=(BR.version&&BR.version()|0)||0; }catch(e){}
+    el.textContent = "app v"+v;
+  }
+
+  function refresh(){ readConfigs(); drawConfigs(); truth(); stamp(); probe(); }
+
+  // ---- bring the bridge up, waiting for it on a cold start ------------------
+  function boot(){
+    BR = bridge();
+    if(BR){ refresh(); return true; }
+    return false;
+  }
+  if(!boot()){
+    var tries=0, hunt=setInterval(function(){
+      if(boot() || ++tries>40){ clearInterval(hunt); if(!BR){ paint(false); stamp(); } }
+    }, 250);
+  }
+  // in a plain browser (no bridge, e.g. testing) still render a sane empty state
+  setTimeout(function(){ if(!BR){ drawConfigs(); paint(false); } }, 300);
+})();
+</script>
+</body>
+</html>
