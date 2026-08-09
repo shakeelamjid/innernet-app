@@ -98,6 +98,15 @@ with sync_playwright() as p:
     print("  hint:", mh[:60] or "(none)")
     if "Connect first" not in mh: fails.append("no bootstrap hint when offline")
 
+    print("=== airplane mode must NOT claim traffic is flowing ===")
+    pg.evaluate("Object.defineProperty(navigator,'onLine',{get:()=>false,configurable:true})")
+    pg.evaluate("window.dispatchEvent(new CustomEvent('innernet:state',{detail:{connected:true}}))")
+    pg.wait_for_timeout(400)
+    h = pg.text_content("#stateHint") or ""
+    print("  hint while offline:", h)
+    if "nothing is getting through" not in h:
+        fails.append("still claims a working connection with no network")
+
     print("=== version stamp visible ===")
     print("  stamp:", pg.text_content("#stamp"))
 

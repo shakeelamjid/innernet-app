@@ -149,6 +149,8 @@
   var T = {
     off:"Tap to connect", on:"Connected", conn:"Connecting…",
     offh:"Not connected", onh:"You're protected", allow:"Allow the VPN when asked",
+    nonet:"No internet on this phone", nonet_h:"Turn off airplane mode or join Wi-Fi",
+    dead_h:"Connected, but nothing is getting through",
     failed:"Couldn't connect. Try again.", nocfg:"Nothing to connect with — add one below",
     none_t:"No connection yet", none_h:"Scan a card or paste a link to begin"
   };
@@ -160,6 +162,15 @@
     stage.classList.toggle("on", !!isOn);
     txt.textContent = isOn ? T.on : (hasAny() ? T.off : T.none_t);
     if(failed && !isOn) return;                 // keep a failure + its reason visible
+    // The VPN service starts happily with no network at all, so "the service is
+    // running" is NOT "your traffic is going somewhere". Saying "Connected" to
+    // someone in airplane mode is a lie the whole screen depends on not telling.
+    if(isOn && navigator.onLine === false){
+      hint.textContent = T.dead_h;
+      hint.style.color = "var(--amber)";
+      return;
+    }
+    hint.style.color = "";
     hint.textContent = isOn ? T.onh : (hasAny() ? T.offh : T.none_h);
   }
 
@@ -262,6 +273,11 @@
     if(!BR){ BR = bridge(); }                    // may have arrived since load
     if(!hasAny()){ $("scanBtn").focus(); return; }
     if(!BR || typeof BR.setConnected!=="function"){ hint.textContent=T.failed; return; }
+    // Deliberately NOT refusing to connect when navigator.onLine is false:
+    // that signal is unreliable in a WebView (captive portals, restricted
+    // networks), and blocking the button on a bad guess strands someone who
+    // could have connected. Let the attempt happen; just never claim a success
+    // that did not occur — see paint().
     busy=true; failed=false; why.style.display="none";
     var goingOn = !stage.classList.contains("on");
     txt.textContent=T.conn; hint.textContent = goingOn ? T.allow : "";
@@ -336,8 +352,11 @@
   // ---- version stamp (this build), always visible so a stale APK is obvious --
   function stamp(){
     var el=$("stamp"); if(!BR){ el.textContent=""; return; }
-    var v=0; try{ v=(BR.version&&BR.version()|0)||0; }catch(e){}
-    el.textContent = "app v"+v;
+    // The build tag, not the bridge number. The bridge number is an internal
+    // compatibility marker that stays put across releases, so showing it made a
+    // freshly updated app look stale. The shell puts the build in its UA.
+    var m = /InnernetApp\/([0-9.]+)/.exec(navigator.userAgent || "");
+    el.textContent = m ? ("Innernet " + m[1]) : "";
   }
 
   function refresh(){ readConfigs(); drawConfigs(); truth(); stamp(); probe(); }
