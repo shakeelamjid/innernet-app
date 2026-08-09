@@ -20,11 +20,11 @@ permissions:
 
 env:
   NDK_VERSION: '29.0.14206865'
-  # The human-facing build number. Bump this on every release, and bump
-  # APP_BUILD_LATEST on the panel to match — that pairing is what makes the
-  # in-app "a newer version is available" banner appear. It is deliberately NOT
-  # the bridge version, which only changes when a bridge method changes.
-  APP_BUILD: '1.1'
+  # The build number, taken from the run so it always increases and never has
+  # to be remembered. It reaches the shell as its User-Agent tag and the release
+  # as "-b<number>", and the panel reads that number back off the release — so
+  # publishing a build is all it takes for existing users to be told about it.
+  APP_BUILD: ${{ github.run_number }}
 
 jobs:
   build:
@@ -170,6 +170,12 @@ jobs:
             i=$((i+1))
             mv "$f" "out/innernet-$(grep -oP 'versionName = "\K[^"]+' upstream/V2rayNG/app/build.gradle.kts)-$(basename "$f" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64|x86|universal' || echo app).apk"
           done
+          ls -lh out/
+          # A stable name as well as the versioned one. A fixed address can then
+          # always fetch the current build — no API lookup, nothing to update
+          # per release — which is what the download proxy relies on.
+          STABLE="$(ls out/*.apk | head -1)"
+          cp "$STABLE" out/Innernet.apk
           ls -lh out/
 
       - name: Upload as a build artifact
