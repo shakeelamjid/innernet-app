@@ -137,6 +137,6 @@ fi
 # ------------------------------------------------------- the Innernet face
 # Without this the app is a rebranded v2rayNG showing its own engineer-facing
 # screens. This points it at the panel's /m pages and wires the native bridge.
-python3 "$(dirname "$0")/add_webview.py" "$APP_DIR" "${WEB_URL:-${SITE_URL%/buy}/m}" "$APP_ID"
+python3 "$(dirname "$0")/add_webview.py" "$APP_DIR" "${WEB_URL:-${SITE_URL%/buy}/m}" "$APP_ID" "${APP_BUILD:-1.1}"
 
 printf '\nBranding applied. Build with:\n  cd %s && ./gradlew assembleRelease\n' "$(dirname "$APP_DIR")"

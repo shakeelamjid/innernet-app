@@ -18,7 +18,12 @@ import os
 import re
 import sys
 
-app_dir, site_url, pkg = sys.argv[1:4]
+_args = sys.argv[1:]
+app_dir, site_url, pkg = _args[:3]
+# Build identity, kept apart from bridge compatibility on purpose. This is
+# what the panel compares against to say "a newer version is available"; it
+# must never gate the tunnel. Single-sourced from the workflow.
+app_build = _args[3] if len(_args) > 3 else "1.1"
 java_root = os.path.join(app_dir, "src", "main", "java", "com", "v2ray", "ang")
 manifest = os.path.join(app_dir, "src", "main", "AndroidManifest.xml")
 
@@ -155,7 +160,7 @@ class InnernetActivity : FragmentActivity() {{
         web.settings.allowUniversalAccessFromFileURLs = true
         // The server uses this to serve the in-app pages rather than the
         // marketing site, even if a link leads out of /m.
-        web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/1.1"
+        web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/{app_build}"
         // never show a stale screen after the panel is redeployed
         web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         web.clearCache(true)
