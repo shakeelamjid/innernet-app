@@ -20,11 +20,6 @@ permissions:
 
 env:
   NDK_VERSION: '29.0.14206865'
-  # The build number, taken from the run so it always increases and never has
-  # to be remembered. It reaches the shell as its User-Agent tag and the release
-  # as "-b<number>", and the panel reads that number back off the release — so
-  # publishing a build is all it takes for existing users to be told about it.
-  APP_BUILD: ${{ github.run_number }}
 
 jobs:
   build:
@@ -46,6 +41,15 @@ jobs:
         env:
           SITE_URL: https://innernetcorp.com/buy
           WEB_URL: https://innernetcorp.com/m
+          # The build number, taken from the run so it always increases and
+          # never has to be remembered. It becomes the shell's User-Agent tag,
+          # and the release is named "-b<same number>", which the panel reads
+          # back — so publishing a build is all it takes to notify older
+          # installs. Set here rather than at workflow level: context
+          # availability is restricted there, and an expression that cannot be
+          # evaluated makes the whole workflow file invalid, which shows up as
+          # "nothing happened" rather than as an error.
+          APP_BUILD: ${{ github.run_number }}
         run: |
           chmod +x brand.sh
           ./brand.sh
