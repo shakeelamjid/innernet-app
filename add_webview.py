@@ -147,9 +147,15 @@ class InnernetActivity : FragmentActivity() {{
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.databaseEnabled = true
+        // The launch screen is a bundled asset served from file://. It still
+        // needs to reach the panel for the store links and the update check,
+        // and a file:// origin is treated as opaque, so that fetch would be
+        // refused as cross-origin without this. The only pages this WebView
+        // ever loads are our own asset and our own site.
+        web.settings.allowUniversalAccessFromFileURLs = true
         // The server uses this to serve the in-app pages rather than the
         // marketing site, even if a link leads out of /m.
-        web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/1.0"
+        web.settings.userAgentString = web.settings.userAgentString + " InnernetApp/1.1"
         // never show a stale screen after the panel is redeployed
         web.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         web.clearCache(true)
@@ -182,7 +188,10 @@ class InnernetActivity : FragmentActivity() {{
                             "display:flex;align-items:center;justify-content:center;height:100vh;" +
                             "margin:0;text-align:center;padding:24px'><div>" +
                             "<p style='font-size:16px'>Can't reach Innernet</p>" +
-                            "<p style='font-size:13px;color:#8b8b93'>Check your connection and try again.</p>" +
+                            "<p style='font-size:13px;color:#8b8b93'>The store needs a connection. " +
+                            "If it is blocked, connect first — the tunnel opens it.</p>" +
+                            "<p><a href='file:///android_asset/connect.html' " +
+                            "style='color:#17e6c9;font-size:14px'>Back to connect</a></p>" +
                             "</div></body>", "text/html; charset=utf-8", null
                     )
                 }}
@@ -231,10 +240,12 @@ class InnernetActivity : FragmentActivity() {{
         ) {{
             notifyPermission.launch("android.permission.POST_NOTIFICATIONS")
         }}
-        // A cache-buster on the first load guarantees a fresh page after a
-        // redeploy, even if something between us and the server caches.
-        val fresh = home + (if (home.contains("?")) "&" else "?") + "b=" + System.currentTimeMillis()
-        web.loadUrl(if (savedInstanceState == null) fresh else web.url ?: fresh)
+        // Launch from the bundled screen rather than the server. Connecting has
+        // to be possible when the site is unreachable — censored or simply
+        // offline — because the config already lives in the tunnel engine, and
+        // once the tunnel is up the store links load through it.
+        val start = "file:///android_asset/connect.html"
+        web.loadUrl(if (savedInstanceState == null) start else web.url ?: start)
     }}
 
     /** Push the service's actual state into the page. */
@@ -582,6 +593,23 @@ class InnernetActivity : FragmentActivity() {{
 path = os.path.join(java_root, "ui", "innernet", "InnernetActivity.kt")
 open(path, "w", encoding="utf-8").write(activity)
 print(f"  activity    : {os.path.relpath(path, app_dir)}")
+
+# ------------------------------------------------ the local launch screen
+# The first screen is a bundled asset, not a server fetch, so the tunnel can be
+# started when the site is unreachable. %%SITE%% is filled in here so the page
+# knows where the store lives. Missing asset = a blank launcher, so fail loudly
+# rather than shipping that.
+_here = os.path.dirname(os.path.abspath(__file__))
+_src = os.path.join(_here, "assets", "connect.html")
+if not os.path.isfile(_src):
+    fail("assets/connect.html is missing — the launcher would open a blank page")
+_assets = os.path.join(app_dir, "src", "main", "assets")
+os.makedirs(_assets, exist_ok=True)
+_site = site_url.rsplit("/m", 1)[0]
+open(os.path.join(_assets, "connect.html"), "w", encoding="utf-8").write(
+    open(_src, encoding="utf-8").read().replace("%%SITE%%", _site)
+)
+print(f"  connect     : bundled as an asset, store at {_site}")
 # ------------------------------------------------- the bridge must be complete
 # Methods have been lost mid-edit before, which silently kills a button in the
 # app while everything still compiles. Fail the build instead.
