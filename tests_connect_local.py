@@ -23,7 +23,9 @@ BRIDGE = """
   function broadcast(){ window.dispatchEvent(new CustomEvent('innernet:state',
     {detail:{connected:S.running}})); }
   window.Innernet = {
-    version: ()=>7,
+    version: ()=>8,
+    currentLink: ()=>(S.cfgs.find(c=>c.selected)
+        ? 'vless://11111111-2222-3333-4444-555555555555@x:443' : ''),
     listConfigs: ()=>JSON.stringify(S.cfgs),
     selectConfig: (id)=>{ S.cfgs.forEach(c=>c.selected = c.id===id); return true; },
     hasConfig: ()=>S.cfgs.some(c=>c.selected),
@@ -136,6 +138,28 @@ with sync_playwright() as p:
     print("  reported home:", bool(reported), "| carries a timezone:",
           any("tz=" in r for r in reported))
     if not reported: fails.append("measurement not reported")
+
+    print("=== My plan opens inside the app, never navigating away ===")
+    pg.route("**/api/plan*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body='{"ok":true,"name":"Ali","unlimited_data":false,"no_expiry":false,'
+             '"gb_left":12.5,"gb_total":40,"pct":31,"days_left":9}'))
+    pg.click("#mAccount"); pg.wait_for_timeout(1800)
+    sheet_open = pg.is_visible("#sheet")
+    body = pg.inner_text("#sheetBody") or ""
+    print("  sheet body was:", repr(body[:90]))
+    print("  sheet opened:", sheet_open, "| url unchanged:", pg.url.endswith("connect.html"))
+    print("  shows the plan:", "12.5" in body and "9 days" in body.replace("  ", " "))
+    if not sheet_open: fails.append("My plan did not open")
+    if not pg.url.endswith("connect.html"): fails.append("My plan navigated away")
+    if "12.5" not in body: fails.append("plan data missing")
+
+    print("=== closing returns to a live connect screen ===")
+    pg.click("#sheetClose"); pg.wait_for_timeout(700)
+    print("  sheet closed:", not pg.is_visible("#sheet"),
+          "| still connected:", pg.eval_on_selector("#stage","e=>e.classList.contains('on')"))
+    if pg.is_visible("#sheet"): fails.append("sheet would not close")
 
     print("=== version stamp visible ===")
     print("  stamp:", pg.text_content("#stamp"))

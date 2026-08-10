@@ -349,7 +349,7 @@ class InnernetActivity : FragmentActivity() {{
          *  page can tell whether the installed app is current. Without this,
          *  testing a server fix against an old APK looks like the fix failed. */
         @JavascriptInterface
-        fun version(): Int = 7
+        fun version(): Int = 8
 
         /** Start or stop the tunnel.
          *
@@ -388,6 +388,27 @@ class InnernetActivity : FragmentActivity() {{
         /** The truth, as reported by the process that actually runs the tunnel. */
         @JavascriptInterface
         fun isConnected(): Boolean = serviceRunning
+
+        /** The selected config's share link.
+         *
+         *  The page needs to say WHICH config it is asking about, and a session
+         *  cookie cannot carry that: a call from a bundled file:// page is
+         *  cross-site, so a SameSite cookie is withheld and the panel ends up
+         *  insisting the phone holds nothing while the tunnel is plainly up.
+         *  The link is already the customer's own secret, so it identifies them
+         *  without a session having to exist.
+         */
+        @JavascriptInterface
+        fun currentLink(): String {{
+            return try {{
+                val id = MmkvManager.getSelectServer() ?: return ""
+                // The VLESS user id, which is what the panel matches a config
+                // by. Upstream has no public call that hands back the whole
+                // share link — share2Clipboard would have to hijack the
+                // clipboard to get at it — and the id alone is enough.
+                MmkvManager.decodeServerConfig(id)?.password ?: ""
+            }} catch (e: Exception) {{ "" }}
+        }}
 
         /** Is there anything to connect with? */
         @JavascriptInterface
@@ -645,7 +666,8 @@ print(f"  connect     : bundled as an asset, store at {_site}")
 # app while everything still compiles. Fail the build instead.
 REQUIRED = ["version", "setConnected", "isConnected", "hasConfig", "importConfig",
             "scan", "paste", "biometric", "removeConfig", "listConfigs",
-            "selectConfig", "stats", "diagnostics", "lastLog", "advanced"]
+            "selectConfig", "stats", "diagnostics", "lastLog", "advanced",
+            "currentLink"]
 written = open(path, encoding="utf-8").read()
 missing = [m for m in REQUIRED if f"fun {m}" not in written]
 if missing:
