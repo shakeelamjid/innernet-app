@@ -179,8 +179,7 @@
   var T = {
     off:"Tap to connect", on:"Connected", conn:"Connecting…",
     offh:"Not connected", onh:"You're protected", allow:"Allow the VPN when asked",
-    nonet:"No internet on this phone", nonet_h:"Turn off airplane mode or join Wi-Fi",
-    dead_h:"Connected, but nothing is getting through",
+    nothrough:"No internet", nothrough_h:"The tunnel is on, but nothing is getting through",
     failed:"Couldn't connect. Try again.", nocfg:"Nothing to connect with — add one below",
     none_t:"No connection yet", none_h:"Scan a card or paste a link to begin"
   };
@@ -193,13 +192,19 @@
     txt.textContent = isOn ? T.on : (hasAny() ? T.off : T.none_t);
     if(failed && !isOn) return;                 // keep a failure + its reason visible
     // The VPN service starts happily with no network at all, so "the service is
-    // running" is NOT "your traffic is going somewhere". Saying "Connected" to
-    // someone in airplane mode is a lie the whole screen depends on not telling.
-    if(isOn && navigator.onLine === false){
-      hint.textContent = T.dead_h;
+    // running" is NOT "your traffic is going somewhere". navigator.onLine is no
+    // use for telling them apart: a WebView counts the VPN interface itself as
+    // a network and reports true in airplane mode. The only honest signal is
+    // whether anything actually moved, which is what the measurement below
+    // records — so the headline follows THAT, not the service.
+    if(isOn && TRAFFIC === false){
+      txt.textContent = T.nothrough;
+      txt.style.color = "var(--amber)";
+      hint.textContent = T.nothrough_h;
       hint.style.color = "var(--amber)";
       return;
     }
+    txt.style.color = "";
     hint.style.color = "";
     hint.textContent = isOn ? T.onh : (hasAny() ? T.offh : T.none_h);
   }
@@ -344,12 +349,27 @@
     el.onclick = function(e){
       e.preventDefault();
       history.pushState({sheet:1}, "");     // so Back closes the sheet
-      if(url){ openSheet(title); sheetURL(url); } else { showPlan(); }
+      if(url){
+        openSheet(title);
+        // Learn the token first when we do not have one, so the page opens
+        // knowing which config it is looking at rather than offering to sell a
+        // new one.
+        if(!PLAN_TOKEN && configId()){
+          sheetHTML('<p style="color:var(--dim);font-size:13px">Opening…</p>');
+          fetch(SITE + "/api/plan?link=" + encodeURIComponent(configId()), {cache:"no-store"})
+            .then(function(r){ return r.json(); })
+            .then(function(j){ if(j && j.token) PLAN_TOKEN = j.token; })
+            .catch(function(){})
+            .then(function(){ sheetURL(storeURL(url)); });
+        } else {
+          sheetURL(storeURL(url));
+        }
+      } else { showPlan(); }
       return false;
     };
   }
-  sheetLink($("mBuy"), "Buy", M + "/buy");
-  sheetLink($("mRenew"), "Renew", M + "/renew");
+  sheetLink($("mBuy"), "Buy", "/buy");
+  sheetLink($("mRenew"), "Renew", "/renew");
   sheetLink($("mAccount"), "My plan", "");
 
   // ---- online-only niceties: reachability chip + "newer app" banner. These
@@ -417,6 +437,8 @@
   // The same measurement is the only view anyone gets of the leg between a
   // customer and the server; the panel cannot see it from the other end.
   var testing = false;
+  // null = not established yet, true = something came back, false = nothing did.
+  var TRAFFIC = null;
   function showSpeed(v){ var el=$("mbps"); if(el) el.textContent = v; }
 
   async function measure(report){
@@ -446,10 +468,16 @@
       var secs = Math.max((Date.now() - t0) / 1000, 0.05);
       var mbps = (got * 8) / secs / 1000000;
       showSpeed(mbps >= 100 ? mbps.toFixed(0) : mbps.toFixed(1));
+      TRAFFIC = true;
+      truth();
       if(report) send(mbps, firstByte);
     }catch(e){
-      // Offline, or the site is blocked and the tunnel is not carrying it.
+      // Nothing came back. Either there is no network at all, or the tunnel is
+      // up but carrying nothing — from the customer's side those are the same
+      // thing, and both mean the screen must stop saying "Connected".
       showSpeed("—");
+      TRAFFIC = false;
+      truth();
     }
     testing = false;
   }
@@ -492,13 +520,42 @@
     $("sheetBody").style.display = "block";
     $("sheetBody").innerHTML = html;
   }
+  var sheetTimer = null;
   function sheetURL(url){
     // Buy and renew are genuinely online-only, so they stay server-rendered —
     // but inside the sheet, where a failure is contained.
-    $("sheetBody").style.display = "none";
     var f = $("sheetFrame");
+    $("sheetBody").style.display = "none";
     f.style.display = "block";
+    var loaded = false;
+    f.onload = function(){ loaded = true; if(sheetTimer) clearTimeout(sheetTimer); };
+    clearTimeout(sheetTimer);
+    // A frame that cannot load renders nothing at all — a black panel with no
+    // explanation, which is what a customer saw when the site was unreachable.
+    sheetTimer = setTimeout(function(){
+      if(loaded) return;
+      f.style.display = "none";
+      $("sheetBody").style.display = "block";
+      $("sheetBody").innerHTML =
+        '<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
+        "This part needs the store, and it can't be reached right now.</p>" +
+        '<p style="color:var(--dim);font-size:12.5px;margin-top:10px">' +
+        "If the site is blocked where you are, connect first — the tunnel opens " +
+        "it. Your connection keeps working either way.</p>";
+    }, 9000);
     f.src = url;
+  }
+
+  // The panel identifies a customer by a session cookie, which a page loaded
+  // from file:// can never establish — that is why Renew kept offering to build
+  // a new plan instead of renewing the one this phone holds. /api/plan hands
+  // back the same token the mobile pages accept in the url, so carry it.
+  var PLAN_TOKEN = "";
+
+  function storeURL(path){
+    var u = M + path + "?embed=1";
+    if(PLAN_TOKEN) u += "&t=" + encodeURIComponent(PLAN_TOKEN);
+    return u;
   }
 
   function configId(){
@@ -524,6 +581,7 @@
       if(to) clearTimeout(to);
       var j = await r.json();
       if(!j.ok) throw new Error("unknown");
+      if(j.token) PLAN_TOKEN = j.token;
       var rows = [
         ["Name", (j.name||"").replace(/[<>&]/g,"")],
         ["Data", j.unlimited_data ? "Unlimited" : (j.gb_left + " GB of " + j.gb_total + " GB left")],
@@ -544,8 +602,8 @@
         '<button class="btn" id="planRenew" style="flex:1">Renew</button>' +
         '<button class="btn" id="planBuy" style="flex:1">Buy another</button></div>');
       var pr=$("planRenew"), pb=$("planBuy");
-      if(pr) pr.onclick = function(){ openSheet("Renew"); sheetURL(M + "/renew"); };
-      if(pb) pb.onclick = function(){ openSheet("Buy"); sheetURL(M + "/buy"); };
+      if(pr) pr.onclick = function(){ openSheet("Renew"); sheetURL(storeURL("/renew")); };
+      if(pb) pb.onclick = function(){ openSheet("Buy"); sheetURL(storeURL("/buy")); };
     }catch(e){
       sheetHTML('<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
         "Can't reach the store right now, so the plan can't be checked. " +
@@ -570,6 +628,7 @@
     } else {
       box.style.display = "none";
       measuredThisSession = false;
+      TRAFFIC = null;                 // a fresh question next time it comes up
       showSpeed("—");
     }
   }

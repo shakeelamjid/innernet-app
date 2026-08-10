@@ -100,14 +100,17 @@ with sync_playwright() as p:
     print("  hint:", mh[:60] or "(none)")
     if "Connect first" not in mh: fails.append("no bootstrap hint when offline")
 
-    print("=== airplane mode must NOT claim traffic is flowing ===")
-    pg.evaluate("Object.defineProperty(navigator,'onLine',{get:()=>false,configurable:true})")
-    pg.evaluate("window.dispatchEvent(new CustomEvent('innernet:state',{detail:{connected:true}}))")
-    pg.wait_for_timeout(400)
-    h = pg.text_content("#stateHint") or ""
-    print("  hint while offline:", h)
-    if "nothing is getting through" not in h:
-        fails.append("still claims a working connection with no network")
+    print("=== no traffic must NOT read as Connected ===")
+    # The probe fails, which is what airplane mode looks like from in here.
+    pg.route("**/speed/probe*", lambda route: route.abort())
+    pg.click("#dial"); pg.wait_for_timeout(4500)
+    head = pg.text_content("#stateText") or ""
+    hint2 = pg.text_content("#stateHint") or ""
+    print("  headline:", head, "| hint:", hint2)
+    if "Connected" in head:
+        fails.append("headline still says Connected with nothing getting through")
+    pg.unroute("**/speed/probe*")
+    pg.click("#dial"); pg.wait_for_timeout(800)
 
     print("=== a scan must not blank the screen ===")
     pg.evaluate("window.innernetImported && window.innernetImported()")
