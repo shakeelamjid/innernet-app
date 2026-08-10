@@ -123,7 +123,8 @@
     </div>
 
     <div class="plan" id="planBox" style="display:none">
-      <select id="pick" aria-label="Which connection"></select>
+      <select id="pick" aria-label="Which connection" style="display:none"></select>
+      <div class="nm" id="pickOne" style="display:none"></div>
     </div>
 
     <div class="actions" id="addActions">
@@ -220,22 +221,27 @@
 
   function drawConfigs(){
     readConfigs();
-    var planBox=$("planBox"), pick=$("pick"), removeBtn=$("removeBtn");
+    var planBox=$("planBox"), pick=$("pick"), one=$("pickOne"), removeBtn=$("removeBtn");
     if(!hasAny()){
       planBox.style.display="none"; removeBtn.style.display="none"; return;
     }
     removeBtn.style.display="";
+    planBox.style.display="";
+    // Two elements, shown and hidden — never replaced. Swapping the <select>
+    // for a <div> when only one config was held destroyed the element for good,
+    // so adding a second one filled a div with <option> tags: the names showed
+    // as plain stacked text and nothing could be chosen ever again.
     if(CONFIGS.length > 1){
-      planBox.style.display="";
+      one.style.display = "none";
+      pick.style.display = "";
       pick.innerHTML = CONFIGS.map(function(c){
         var nm=(c.name||"").replace(/[<>&]/g,"");
         return '<option value="'+c.id+'"'+(c.selected?" selected":"")+">"+nm+"</option>";
       }).join("");
     } else {
-      // one config: show its name, no dropdown clutter
-      planBox.style.display="";
-      var nm=(CONFIGS[0].name||"").replace(/[<>&]/g,"");
-      pick.outerHTML = '<div class="nm" id="pick">'+nm+"</div>";
+      pick.style.display = "none";
+      one.style.display = "";
+      one.textContent = CONFIGS[0].name || "";
     }
   }
 
@@ -592,6 +598,10 @@
         ["Data", j.unlimited_data ? "Unlimited" : (j.gb_left + " GB of " + j.gb_total + " GB left")],
         ["Time", j.no_expiry ? "No expiry" : (j.days_left + " days left")],
       ];
+      // Unlimited data AND no expiry means renewal has nothing to add. Offering
+      // it anyway sent the customer to a page that quietly turned into "build
+      // and buy a plan", which is not what the word renew promises.
+      var nothingToRenew = j.unlimited_data && j.no_expiry;
       sheetHTML(
         '<div style="background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px">' +
         rows.map(function(r){
@@ -603,9 +613,16 @@
           '<div class="meterwrap" style="margin-top:14px;height:4px;background:var(--bd);border-radius:99px">' +
           '<div style="height:100%;width:' + j.pct + '%;background:var(--acc);border-radius:99px"></div></div>') +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:14px">' +
-        '<button class="btn" id="planRenew" style="flex:1">Renew</button>' +
-        '<button class="btn" id="planBuy" style="flex:1">Buy another</button></div>');
+        (nothingToRenew
+          ? '<p style="color:var(--mut);font-size:13px;line-height:1.6;margin-top:14px">' +
+            'This is an unlimited plan with no end date — there is nothing a ' +
+            'renewal could add. You can add another connection for a second ' +
+            'device whenever you need one.</p>' +
+            '<div style="display:flex;margin-top:12px">' +
+            '<button class="btn" id="planBuy" style="flex:1">Buy another connection</button></div>'
+          : '<div style="display:flex;gap:8px;margin-top:14px">' +
+            '<button class="btn" id="planRenew" style="flex:1">Renew</button>' +
+            '<button class="btn" id="planBuy" style="flex:1">Buy another</button></div>'));
       var pr=$("planRenew"), pb=$("planBuy");
       if(pr) pr.onclick = function(){ openSheet("Renew"); sheetURL(storeURL("/renew")); };
       if(pb) pb.onclick = function(){ openSheet("Buy"); sheetURL(storeURL("/buy")); };

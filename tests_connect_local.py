@@ -158,6 +158,20 @@ with sync_playwright() as p:
     if not pg.url.endswith("connect.html"): fails.append("My plan navigated away")
     if "12.5" not in body: fails.append("plan data missing")
 
+    print("=== an unlimited plan is not offered a renewal ===")
+    pg.click("#sheetClose"); pg.wait_for_timeout(400)
+    pg.route("**/api/plan*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body='{"ok":true,"name":"Forever","unlimited_data":true,"no_expiry":true,'
+             '"gb_left":null,"gb_total":null,"pct":0,"days_left":null}'))
+    pg.click("#mAccount"); pg.wait_for_timeout(1800)
+    body2 = pg.inner_text("#sheetBody") or ""
+    print("  says unlimited:", "Unlimited" in body2)
+    print("  offers renew:", "Renew" in body2, "(must be False)")
+    if "Renew" in body2: fails.append("unlimited plan still offered a renewal")
+    if "Unlimited" not in body2: fails.append("unlimited not stated")
+
     print("=== closing returns to a live connect screen ===")
     pg.click("#sheetClose"); pg.wait_for_timeout(700)
     print("  sheet closed:", not pg.is_visible("#sheet"),
@@ -172,9 +186,41 @@ with sync_playwright() as p:
     ctx2.add_init_script(BRIDGE.replace(
         "{id:'b', name:'Family tablet', selected:false}", ""))
     p2 = ctx2.new_page(); p2.goto(URL); p2.wait_for_timeout(600)
-    is_select = p2.eval_on_selector("#pick", "e=>e.tagName.toLowerCase()") if p2.query_selector("#pick") else "none"
-    print("  #pick is a <"+is_select+"> (want div, not select)")
-    if is_select == "select": fails.append("dropdown shown for a single config")
+    # The <select> must still EXIST — destroying it is what broke switching
+    # once a second config was added — but it must not be shown for one.
+    exists = p2.query_selector("#pick") is not None
+    shown = p2.is_visible("#pick")
+    label = p2.is_visible("#pickOne")
+    print("  select exists:", exists, "| hidden:", not shown, "| name shown instead:", label)
+    if not exists: fails.append("the select was destroyed; switching will break later")
+    if shown: fails.append("dropdown shown for a single config")
+    if not label: fails.append("single config name not shown")
+
+    print("=== adding a second config must leave a working picker ===")
+    # The exact regression: hold one config, then receive another. The old code
+    # replaced the <select> with a <div> for the single case, so the options
+    # rendered as plain stacked text and nothing could be chosen again.
+    c3 = b.new_context(viewport={"width":390,"height":844}, is_mobile=True, offline=True)
+    c3.add_init_script(BRIDGE.replace(
+        "{id:'b', name:'Family tablet', selected:false}", ""))
+    p3 = c3.new_page()
+    p3.goto(URL)
+    p3.wait_for_timeout(700)
+    p3.evaluate("""() => {
+        const first = JSON.parse(window.Innernet.listConfigs());
+        window.Innernet.listConfigs = () => JSON.stringify(
+            first.concat([{id: 'b', name: 'Family tablet', selected: false}]));
+    }""")
+    p3.evaluate("window.innernetImported && window.innernetImported()")
+    p3.wait_for_timeout(600)
+    tag = p3.eval_on_selector("#pick", "e=>e.tagName.toLowerCase()")
+    opts = p3.eval_on_selector_all("#pick option", "e=>e.map(o=>o.textContent.trim())")
+    visible = p3.is_visible("#pick")
+    print("  #pick is still a <" + tag + ">, visible:", visible, "| offers:", opts)
+    if tag != "select":
+        fails.append("the single-config path destroyed the picker")
+    if len(opts) != 2 or not visible:
+        fails.append("second config is not selectable")
 
     b.close()
 
