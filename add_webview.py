@@ -301,7 +301,11 @@ class InnernetActivity : FragmentActivity() {{
             val beforeImport = try {{ MmkvManager.decodeServerList("").toSet() }}
                                catch (e: Exception) {{ emptySet<String>() }}
             val (count, _) = try {{
-                AngConfigManager.importBatchConfig(text, "", false)
+                // append = true. With false, upstream calls removeServerViaSubid("")
+                // first, which deletes every previously scanned config — so
+                // adding a second connection silently destroyed the first. A
+                // phone is meant to hold several and pick one.
+                AngConfigManager.importBatchConfig(text, "", true)
             }} catch (e: Exception) {{
                 Pair(0, 0)
             }}
@@ -424,7 +428,9 @@ class InnernetActivity : FragmentActivity() {{
         fun importConfig(text: String): Boolean {{
             return try {{
                 val before = MmkvManager.decodeServerList("").toSet()
-                val (count, _) = AngConfigManager.importBatchConfig(text, "", false)
+                // append = true, for the same reason as above: importing must
+                // add to what the phone holds, never replace it.
+                val (count, _) = AngConfigManager.importBatchConfig(text, "", true)
                 if (count > 0) {{
                     // pick the one we just added, not whatever happens to be first
                     val after = MmkvManager.decodeServerList("")
@@ -500,6 +506,17 @@ class InnernetActivity : FragmentActivity() {{
                         LauncherManager.stopService(this@InnernetActivity)
                     }}
                     if (!guid.isNullOrEmpty()) MmkvManager.removeServer(guid)
+                    // Upstream clears the selection when the selected config is
+                    // deleted, and does not choose another. With several on the
+                    // phone that leaves the list populated but nothing selected,
+                    // so Connect fails for no visible reason. Fall to whatever
+                    // is left.
+                    try {{
+                        if (MmkvManager.getSelectServer().isNullOrEmpty()) {{
+                            MmkvManager.decodeServerList("").firstOrNull()
+                                ?.let {{ MmkvManager.setSelectServer(it) }}
+                        }}
+                    }} catch (e: Exception) {{ /* best effort */ }}
                     pushState(false)
                 }}
                 true
@@ -676,6 +693,27 @@ if written.count("{") != written.count("}"):
     fail("generated Kotlin has unbalanced braces")
 print(f"  bridge      : {len(REQUIRED)} methods, braces balanced")
 
+
+# ------------------------------------------------- quiet the launcher badge
+# A VPN has to run as a foreground service, and Android will not allow that
+# without a persistent notification — that part is not optional. The dot it puts
+# on the app icon is, and customers read it as an alert about something wrong.
+_notif = os.path.join(java_root, "handler", "NotificationManager.kt")
+if os.path.isfile(_notif):
+    _n = open(_notif, encoding="utf-8").read()
+    if "setShowBadge" not in _n and "chan.lightColor = Color.DKGRAY" in _n:
+        _n = _n.replace(
+            "chan.lightColor = Color.DKGRAY",
+            "chan.lightColor = Color.DKGRAY\n"
+            "        // The service notification must exist; the badge on the app\n"
+            "        // icon need not. A permanent dot reads as an unread alert.\n"
+            "        chan.setShowBadge(false)")
+        open(_notif, "w", encoding="utf-8").write(_n)
+        print("  badge       : off (service notification stays, dot does not)")
+    else:
+        print("  badge       : left alone (already set, or upstream moved)")
+else:
+    print("  badge       : NotificationManager.kt not found — skipped")
 
 # ---------------------------------------------------------------- manifest
 xml = open(manifest, encoding="utf-8").read()

@@ -489,9 +489,14 @@
     var tz = "";
     try{ tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }catch(e){}
     try{
+      // The config's token when we have it, so an operator answering "it is
+      // slow for me" can see what this customer's phone actually measured
+      // rather than guessing. Nothing else is attached — no address, no
+      // destination, no history.
       var body = "mbps=" + encodeURIComponent(mbps.toFixed(2)) +
                  "&ttfb=" + encodeURIComponent(ttfb) +
-                 "&tz=" + encodeURIComponent(tz);
+                 "&tz=" + encodeURIComponent(tz) +
+                 (PLAN_TOKEN ? "&token=" + encodeURIComponent(PLAN_TOKEN) : "");
       fetch(SITE + "/speed/report", {method:"POST", mode:"no-cors",
         headers:{"Content-Type":"application/x-www-form-urlencoded"}, body: body});
     }catch(e){}
