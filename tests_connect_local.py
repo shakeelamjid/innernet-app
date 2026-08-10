@@ -158,6 +158,31 @@ with sync_playwright() as p:
     if not pg.url.endswith("connect.html"): fails.append("My plan navigated away")
     if "12.5" not in body: fails.append("plan data missing")
 
+    print("=== renew is drawn in the app, not fetched as a page ===")
+    pg.route("**/api/renew*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body='{"ok":true,"name":"Ali","unlimited":false,"never_expires":false,'
+             '"gb":40,"days":30,"price_cents":770,"price":"$7.70",'
+             '"min_gb":5,"max_gb":500,"step_gb":5,"min_days":7,"max_days":180,'
+             '"step_days":1,"networks":["TRC20"],"wallets":{"TRC20":"TXaddr"},"pending":""}'))
+    pg.click("#sheetClose"); pg.wait_for_timeout(300)
+    pg.click("#mRenew"); pg.wait_for_timeout(1600)
+    rbody = pg.inner_text("#sheetBody") or ""
+    print("  no iframe used:", not pg.is_visible("#sheetFrame"))
+    print("  shows a price:", "$7.70" in rbody, "| steppers:", "40 GB" in rbody and "30 days" in rbody)
+    if pg.is_visible("#sheetFrame"): fails.append("renew still loads a server page")
+    if "$7.70" not in rbody: fails.append("renew price not drawn")
+    pg.click('[data-step="gb"][data-dir="1"]'); pg.wait_for_timeout(400)
+    print("  stepper moves:", pg.text_content("#r_gb"))
+    if "45" not in (pg.text_content("#r_gb") or ""): fails.append("stepper does not step")
+    pg.click("#payVoucher"); pg.wait_for_timeout(300)
+    print("  voucher field appears:", pg.is_visible("#vCode"))
+    if not pg.is_visible("#vCode"): fails.append("no voucher entry")
+    pg.click("#payCrypto"); pg.wait_for_timeout(300)
+    print("  usdt address shown:", "TXaddr" in (pg.inner_text("#payArea") or ""))
+    pg.unroute("**/api/renew*")
+
     print("=== an unlimited plan is not offered a renewal ===")
     pg.click("#sheetClose"); pg.wait_for_timeout(400)
     pg.route("**/api/plan*", lambda route: route.fulfill(

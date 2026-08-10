@@ -370,12 +370,12 @@
         } else {
           sheetURL(storeURL(url));
         }
-      } else { showPlan(); }
+      } else if(title === "Renew"){ showRenew(); } else { showPlan(); }
       return false;
     };
   }
   sheetLink($("mBuy"), "Buy", "/buy");
-  sheetLink($("mRenew"), "Renew", "/renew");
+  sheetLink($("mRenew"), "Renew", "");          // drawn here, not fetched
   sheetLink($("mAccount"), "My plan", "");
 
   // ---- online-only niceties: reachability chip + "newer app" banner. These
@@ -624,7 +624,7 @@
             '<button class="btn" id="planRenew" style="flex:1">Renew</button>' +
             '<button class="btn" id="planBuy" style="flex:1">Buy another</button></div>'));
       var pr=$("planRenew"), pb=$("planBuy");
-      if(pr) pr.onclick = function(){ openSheet("Renew"); sheetURL(storeURL("/renew")); };
+      if(pr) pr.onclick = function(){ showRenew(); };
       if(pb) pb.onclick = function(){ openSheet("Buy"); sheetURL(storeURL("/buy")); };
     }catch(e){
       sheetHTML('<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
@@ -634,6 +634,182 @@
         'Your connection keeps working either way.</p>');
     }
   }
+
+  // ---- renew, drawn here rather than fetched as a page ---------------------
+  // The store pages were built to stand alone: their own header, language
+  // picker and tab bar. Shown inside this screen they doubled everything and
+  // the tabs quietly navigated away. Asking for the numbers and drawing them
+  // here keeps one screen with one set of controls.
+  var RENEW = null;
+
+  function money(cents){ return "$" + (cents / 100).toFixed(2); }
+
+  function renewMarkup(j){
+    var gbRow = j.unlimited
+      ? '<div style="color:var(--mut);font-size:13px;margin-bottom:14px">' +
+        'Data stays unlimited — only the time is extended.</div>'
+      : stepper("Data", "gb", j.gb, j.min_gb, j.max_gb, j.step_gb, "GB");
+    var dayRow = j.never_expires
+      ? '<div style="color:var(--mut);font-size:13px;margin-bottom:14px">' +
+        'This plan has no end date — only the data is topped up.</div>'
+      : stepper("Time", "days", j.days, j.min_days, j.max_days, j.step_days, "days");
+    return gbRow + dayRow +
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;' +
+      'padding:14px 0;border-top:1px solid var(--bd);margin-top:4px">' +
+      '<span style="color:var(--mut);font-size:13px">Total</span>' +
+      '<b id="rPrice" style="font-size:22px">' + j.price + '</b></div>' +
+      '<div style="display:flex;gap:8px;margin-top:6px">' +
+      '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
+      (j.networks.length
+        ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
+      '</div><div id="payArea" style="margin-top:14px"></div>';
+  }
+
+  function stepper(label, key, value, min, max, step, unit){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;' +
+      'padding:12px 0;border-bottom:1px solid var(--bd)">' +
+      '<span style="color:var(--mut);font-size:13px">' + label + '</span>' +
+      '<span style="display:flex;align-items:center;gap:12px">' +
+      '<button class="btn" data-step="' + key + '" data-dir="-1" ' +
+      'style="padding:6px 12px;font-size:16px;line-height:1">−</button>' +
+      '<b id="r_' + key + '" data-min="' + min + '" data-max="' + max + '" data-step="' + step +
+      '" style="min-width:74px;text-align:center;font-size:15px">' + value + ' ' + unit + '</b>' +
+      '<button class="btn" data-step="' + key + '" data-dir="1" ' +
+      'style="padding:6px 12px;font-size:16px;line-height:1">+</button></span></div>';
+  }
+
+  function readStep(key){
+    var el = $("r_" + key);
+    return el ? parseInt(el.textContent, 10) : 0;
+  }
+
+  async function priceNow(){
+    if(!RENEW) return;
+    var q = "?link=" + encodeURIComponent(configId()) +
+            "&gb=" + readStep("gb") + "&days=" + readStep("days");
+    try{
+      var r = await fetch(SITE + "/api/renew" + q, {cache:"no-store"});
+      var j = await r.json();
+      if(j.ok && $("rPrice")) $("rPrice").textContent = j.price;
+      if(j.ok) RENEW = j;
+    }catch(e){}
+  }
+
+  async function showRenew(){
+    openSheet("Renew");
+    var id = configId();
+    if(!id){
+      sheetHTML('<p style="color:var(--mut);font-size:14px">This phone is not ' +
+                'holding a connection yet.</p>');
+      return;
+    }
+    sheetHTML('<p style="color:var(--dim);font-size:13px">Checking…</p>');
+    try{
+      var r = await fetch(SITE + "/api/renew?link=" + encodeURIComponent(id), {cache:"no-store"});
+      var j = await r.json();
+      if(!j.ok && j.error === "nothing_to_renew"){
+        sheetHTML('<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
+          'This plan is unlimited with no end date, so there is nothing a ' +
+          'renewal could add.</p>');
+        return;
+      }
+      if(!j.ok) throw new Error(j.error || "failed");
+      if(j.pending){
+        sheetHTML('<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
+          'A renewal is already waiting to be confirmed. Once it is approved the ' +
+          'time and data are added to this same connection.</p>');
+        return;
+      }
+      RENEW = j;
+      sheetHTML(renewMarkup(j));
+    }catch(e){
+      sheetHTML(offlineNote());
+    }
+  }
+
+  function offlineNote(){
+    return '<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
+      "Can't reach the store right now.</p>" +
+      '<p style="color:var(--dim);font-size:12.5px;margin-top:10px">' +
+      "If the site is blocked where you are, connect first — the tunnel opens " +
+      "it. Your connection keeps working either way.</p>";
+  }
+
+  // steppers, payment choice and submission, all delegated from the sheet
+  $("sheetBody").addEventListener("click", async function(e){
+    var stepBtn = e.target.closest ? e.target.closest("[data-step]") : null;
+    if(stepBtn && stepBtn.dataset.dir){
+      var key = stepBtn.dataset.step, el = $("r_" + key);
+      var unit = el.textContent.replace(/[\d\s]/g, "");
+      var step = parseInt(el.dataset.step, 10) || 1;
+      var min = parseInt(el.dataset.min, 10), max = parseInt(el.dataset.max, 10);
+      var v = readStep(key) + step * parseInt(stepBtn.dataset.dir, 10);
+      v = Math.max(min, Math.min(max, v));
+      el.textContent = v + " " + unit;
+      priceNow();
+      return;
+    }
+    if(e.target.id === "payVoucher"){
+      $("payArea").innerHTML =
+        '<input id="vCode" placeholder="Voucher number" autocapitalize="characters" ' +
+        'style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--bd);' +
+        'background:var(--card);color:var(--ink);font:inherit">' +
+        '<button class="btn primary" id="vGo" style="width:100%;margin-top:8px">Pay</button>' +
+        '<div id="payMsg" style="font-size:13px;margin-top:10px"></div>';
+      return;
+    }
+    if(e.target.id === "payCrypto"){
+      var n = RENEW.networks[0];
+      $("payArea").innerHTML =
+        '<div style="font-size:13px;color:var(--mut);margin-bottom:6px">Send ' +
+        RENEW.price + ' of USDT (' + n + ') to</div>' +
+        '<div style="font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all;' +
+        'background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:11px">' +
+        (RENEW.wallets[n] || "") + '</div>' +
+        '<input id="txh" placeholder="Transaction hash" style="width:100%;margin-top:10px;' +
+        'padding:12px;border-radius:10px;border:1px solid var(--bd);background:var(--card);' +
+        'color:var(--ink);font:inherit">' +
+        '<input id="contact" placeholder="How we reach you (optional)" style="width:100%;' +
+        'margin-top:8px;padding:12px;border-radius:10px;border:1px solid var(--bd);' +
+        'background:var(--card);color:var(--ink);font:inherit">' +
+        '<button class="btn primary" id="cGo" style="width:100%;margin-top:8px">I have paid</button>' +
+        '<div id="payMsg" style="font-size:13px;margin-top:10px"></div>';
+      return;
+    }
+    if(e.target.id === "vGo" || e.target.id === "cGo"){
+      var msg = $("payMsg");
+      msg.textContent = "Sending…"; msg.style.color = "var(--dim)";
+      var body = "link=" + encodeURIComponent(configId()) +
+                 "&gb=" + readStep("gb") + "&days=" + readStep("days");
+      if(e.target.id === "vGo"){
+        body += "&method=card&code=" + encodeURIComponent(($("vCode").value || "").trim());
+      } else {
+        body += "&network=" + encodeURIComponent(RENEW.networks[0]) +
+                "&tx_hash=" + encodeURIComponent(($("txh").value || "").trim()) +
+                "&contact=" + encodeURIComponent(($("contact").value || "").trim());
+      }
+      try{
+        var r = await fetch(SITE + "/api/renew", {method:"POST",
+          headers:{"Content-Type":"application/x-www-form-urlencoded"}, body: body});
+        var j = await r.json();
+        if(j.ok && j.paid === "voucher"){
+          msg.style.color = "var(--acc)";
+          msg.textContent = "Done — renewed. " + (j.left ? j.left + " left on the voucher." : "");
+          setTimeout(function(){ closeSheet(); }, 1800);
+        } else if(j.ok && j.order){
+          msg.style.color = "var(--acc)";
+          msg.textContent = "Sent. It will be confirmed shortly and the time added " +
+                            "to this same connection.";
+        } else {
+          msg.style.color = "var(--amber)";
+          msg.textContent = j.error || "That did not go through.";
+        }
+      }catch(err){
+        msg.style.color = "var(--amber)";
+        msg.textContent = "Couldn't reach the store. Try again once connected.";
+      }
+    }
+  });
 
   var retestBtn = $("retest");
   if(retestBtn) retestBtn.onclick = function(){ measure(false); };
