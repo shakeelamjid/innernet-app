@@ -107,6 +107,36 @@ with sync_playwright() as p:
     if "nothing is getting through" not in h:
         fails.append("still claims a working connection with no network")
 
+    print("=== a scan must not blank the screen ===")
+    pg.evaluate("window.innernetImported && window.innernetImported()")
+    pg.wait_for_timeout(300)
+    body = (pg.inner_text("body") or "").strip()
+    print("  still rendering after import:", len(body) > 20)
+    if len(body) <= 20: fails.append("import hook blanked the page")
+    print("  url unchanged:", pg.url.endswith("connect.html"))
+    if not pg.url.endswith("connect.html"): fails.append("import navigated away")
+
+    print("=== connection speed is measured while connected ===")
+    # stand in for the server's probe: 1 MB served instantly, so the number is
+    # deterministic enough to assert on
+    pg.route("**/speed/probe*", lambda route: route.fulfill(
+        status=200, body=b"\0" * 1000000,
+        headers={"Content-Type": "application/octet-stream",
+                 "Access-Control-Allow-Origin": "*"}))
+    reported = []
+    pg.route("**/speed/report", lambda route: (reported.append(route.request.post_data or ""),
+                                               route.fulfill(status=200, body="{}")))
+    pg.click("#dial")
+    pg.wait_for_timeout(6000)
+    shown = pg.is_visible("#live")
+    val = pg.text_content("#mbps")
+    print("  panel visible:", shown, "| reads:", val, "Mbps")
+    if not shown: fails.append("no speed panel while connected")
+    if val in ("—", "…"): fails.append("speed never resolved")
+    print("  reported home:", bool(reported), "| carries a timezone:",
+          any("tz=" in r for r in reported))
+    if not reported: fails.append("measurement not reported")
+
     print("=== version stamp visible ===")
     print("  stamp:", pg.text_content("#stamp"))
 

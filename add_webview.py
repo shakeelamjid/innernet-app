@@ -302,16 +302,24 @@ class InnernetActivity : FragmentActivity() {{
                 // it separately — hand the same text to /m/claim so the session
                 // knows which config this phone is holding. Without this the
                 // scan appears to do nothing.
+                // The launch page is a bundled file:// asset, so a RELATIVE url
+                // here resolves against file:/// and goes nowhere — which is
+                // what turned a scan into a blank white screen. Everything below
+                // is absolute, and nothing navigates: the local screen simply
+                // re-reads the engine, which also works with no network at all.
                 val js = StringBuilder()
-                    .append("(async()=>{{try{{")
-                    .append("const r=await fetch('/m/claim',{{method:'POST',")
+                    .append("(async()=>{{")
+                    .append("try{{await fetch(")
+                    .append(org.json.JSONObject.quote(home.substringBefore("/m") + "/m/claim"))
+                    .append(",{{method:'POST',mode:'no-cors',credentials:'include',")
                     .append("headers:{{'Content-Type':'application/x-www-form-urlencoded'}},")
                     .append("body:'text='+encodeURIComponent(")
                     .append(org.json.JSONObject.quote(text))
-                    .append(")}});")
-                    .append("const j=await r.json();")
-                    .append("location.href=j.ok?j.next:'/m/add';")
-                    .append("}}catch(e){{location.href='/m/add';}}}})()")
+                    .append(")}});}}catch(e){{}}")
+                    .append("if(typeof window.innernetImported==='function'){{")
+                    .append("window.innernetImported();return;}}")
+                    .append("location.reload();")
+                    .append("}})()")
                     .toString()
                 web.evaluateJavascript(js, null)
             }}

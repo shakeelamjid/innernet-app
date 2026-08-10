@@ -105,6 +105,18 @@
 
     <div id="why"></div>
 
+    <div id="live" style="display:none;width:100%;text-align:center">
+      <div style="font-size:11.5px;color:var(--dim);letter-spacing:.04em;
+                  text-transform:uppercase">Your connection</div>
+      <div style="margin-top:3px">
+        <b id="mbps" style="font-size:26px;letter-spacing:-.02em">—</b>
+        <span style="font-size:13px;color:var(--mut)"> Mbps</span>
+      </div>
+      <button id="retest" style="margin-top:6px;background:none;border:0;
+              color:var(--acc);font:inherit;font-size:12px;cursor:pointer">
+        Test again</button>
+    </div>
+
     <div class="state">
       <div class="s" id="stateText">Tap to connect</div>
       <div class="h" id="stateHint">Not connected</div>
@@ -360,6 +372,94 @@
   }
 
   function refresh(){ readConfigs(); drawConfigs(); truth(); stamp(); probe(); }
+
+  // Called by the app after a scan or a paste. It used to navigate to a server
+  // page, which cannot work from a bundled file:// page and left a blank white
+  // screen. Re-reading the engine is all that is actually needed, and it works
+  // with no network.
+  window.innernetImported = function(){
+    readConfigs(); drawConfigs(); truth();
+    if(hasAny()){ hint.textContent = "Connection added"; }
+  };
+
+  // ---- how fast is this connection, here, right now -----------------------
+  // Not "how much data have you used" — that reads zero when idle and tells a
+  // customer nothing. This pulls a fixed block through the tunnel and times it,
+  // which is the number they actually mean when they say the app feels slow.
+  // The same measurement is the only view anyone gets of the leg between a
+  // customer and the server; the panel cannot see it from the other end.
+  var testing = false;
+  function showSpeed(v){ var el=$("mbps"); if(el) el.textContent = v; }
+
+  async function measure(report){
+    if(testing || !stage.classList.contains("on")) return;
+    testing = true; showSpeed("…");
+    var bytes = 3000000;
+    var url = SITE + "/speed/probe?bytes=" + bytes + "&r=" + Date.now();
+    var t0 = Date.now(), firstByte = 0, got = 0;
+    try{
+      var ctrl = ("AbortController" in window) ? new AbortController() : null;
+      var to = ctrl ? setTimeout(function(){ ctrl.abort(); }, 20000) : null;
+      var resp = await fetch(url, {cache:"no-store", signal: ctrl ? ctrl.signal : undefined});
+      if(!resp.ok) throw new Error("probe " + resp.status);
+      if(resp.body && resp.body.getReader){
+        var reader = resp.body.getReader();
+        while(true){
+          var r = await reader.read();
+          if(r.done) break;
+          if(!firstByte) firstByte = Date.now() - t0;
+          got += r.value.length;
+        }
+      } else {
+        var buf = await resp.arrayBuffer();
+        got = buf.byteLength; firstByte = Date.now() - t0;
+      }
+      if(to) clearTimeout(to);
+      var secs = Math.max((Date.now() - t0) / 1000, 0.05);
+      var mbps = (got * 8) / secs / 1000000;
+      showSpeed(mbps >= 100 ? mbps.toFixed(0) : mbps.toFixed(1));
+      if(report) send(mbps, firstByte);
+    }catch(e){
+      // Offline, or the site is blocked and the tunnel is not carrying it.
+      showSpeed("—");
+    }
+    testing = false;
+  }
+
+  function send(mbps, ttfb){
+    // Anonymous: a speed, a rough place from the device's own timezone, nothing
+    // else. The IP would be useless anyway — through the tunnel it is the
+    // server's own.
+    var tz = "";
+    try{ tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; }catch(e){}
+    try{
+      var body = "mbps=" + encodeURIComponent(mbps.toFixed(2)) +
+                 "&ttfb=" + encodeURIComponent(ttfb) +
+                 "&tz=" + encodeURIComponent(tz);
+      fetch(SITE + "/speed/report", {method:"POST", mode:"no-cors",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"}, body: body});
+    }catch(e){}
+  }
+
+  var retestBtn = $("retest");
+  if(retestBtn) retestBtn.onclick = function(){ measure(false); };
+
+  var measuredThisSession = false;
+  function liveBox(){
+    var box=$("live"); if(!box) return;
+    if(stage.classList.contains("on")){
+      box.style.display = "block";
+      if(!measuredThisSession){
+        measuredThisSession = true;
+        setTimeout(function(){ measure(true); }, 1200);   // let the tunnel settle
+      }
+    } else {
+      box.style.display = "none";
+      measuredThisSession = false;
+      showSpeed("—");
+    }
+  }
+  setInterval(liveBox, 1200);
 
   // ---- bring the bridge up, waiting for it on a cold start ------------------
   function boot(){
