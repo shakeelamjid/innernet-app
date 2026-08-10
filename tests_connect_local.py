@@ -36,7 +36,7 @@ BRIDGE = """
       return true;
     },
     isConnected: ()=>S.running,
-    importConfig: ()=>true,
+    importConfig: ()=>{ window.__imported = (window.__imported||0)+1; return true; },
     removeConfig: ()=>{ S.cfgs = S.cfgs.filter(c=>!c.selected);
       if(S.cfgs.length) S.cfgs[0].selected=true; S.running=false; broadcast(); return true; },
     listRemove: ()=>true,
@@ -166,7 +166,8 @@ with sync_playwright() as p:
              '"gb":40,"days":30,"price_cents":770,"price":"$7.70",'
              '"min_gb":5,"max_gb":500,"step_gb":5,"min_days":7,"max_days":180,'
              '"step_days":1,"networks":["TRC20"],"wallets":{"TRC20":"TXaddr"},"pending":""}'))
-    pg.click("#sheetClose"); pg.wait_for_timeout(300)
+    pg.evaluate("() => { const b=document.getElementById('sheetClose'); if (b && document.getElementById('sheet').style.display==='flex') b.click(); }")
+    pg.wait_for_timeout(400)
     pg.click("#mRenew"); pg.wait_for_timeout(1600)
     rbody = pg.inner_text("#sheetBody") or ""
     print("  no iframe used:", not pg.is_visible("#sheetFrame"))
@@ -183,8 +184,72 @@ with sync_playwright() as p:
     print("  usdt address shown:", "TXaddr" in (pg.inner_text("#payArea") or ""))
     pg.unroute("**/api/renew*")
 
+    print("=== buy is drawn in the app and adds the connection itself ===")
+    pg.route("**/api/buy*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body=('{"ok":true,"paid":"voucher","link":"vless://new@x:443","name":"New",'
+              '"left":"$10.80"}') if route.request.method == "POST" else
+             ('{"ok":true,"gb":50,"days":30,"price_cents":920,"price":"$9.20",'
+              '"min_gb":5,"max_gb":500,"step_gb":5,"min_days":7,"max_days":180,'
+              '"step_days":1,"networks":["TRC20"],"wallets":{"TRC20":"TXaddr"}}')))
+    pg.evaluate("() => { const b=document.getElementById('sheetClose'); if (b && document.getElementById('sheet').style.display==='flex') b.click(); }")
+    pg.wait_for_timeout(400)
+    pg.click("#mBuy"); pg.wait_for_timeout(1600)
+    bbody = pg.inner_text("#sheetBody") or ""
+    print("  no iframe:", not pg.is_visible("#sheetFrame"), "| price drawn:", "$9.20" in bbody)
+    if pg.is_visible("#sheetFrame"): fails.append("buy still loads a server page")
+    if "$9.20" not in bbody: fails.append("buy price not drawn")
+    pg.click("#payVoucher"); pg.wait_for_timeout(300)
+    pg.fill("#vCode", "INNR-TEST")
+    pg.click("#vGo"); pg.wait_for_timeout(1200)
+    print("  imported into the tunnel:", pg.evaluate("() => window.__imported || 0"))
+    if not pg.evaluate("() => window.__imported || 0"):
+        fails.append("purchased config not imported")
+    pg.unroute("**/api/buy*")
+
+    print("=== a crypto purchase finishes itself ===")
+    state = {"paid": False}
+    pg.route("**/api/buy*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body=('{"ok":true,"order":"ORDTOKEN"}') if route.request.method == "POST" else
+             ('{"ok":true,"gb":50,"days":30,"price_cents":922,"price":"$9.22",'
+              '"min_gb":5,"max_gb":500,"step_gb":5,"min_days":7,"max_days":180,'
+              '"step_days":1,"networks":["TRC20"],"wallets":{"TRC20":"TXaddr"}}')))
+    pg.route("**/api/order/**", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        headers={"Access-Control-Allow-Origin": "*"},
+        body=('{"ok":true,"status":"verified","link":"vless://paid@x:443","name":"50 GB"}'
+              if state["paid"] else '{"ok":true,"status":"pending"}')))
+    # The previous purchase closes its own sheet on a timer; let that land
+    # before opening another, or it shuts this one underneath us.
+    pg.wait_for_timeout(2500)
+    pg.evaluate("() => { const b=document.getElementById('sheetClose'); if (b && document.getElementById('sheet').style.display==='flex') b.click(); }")
+    pg.wait_for_timeout(400)
+    pg.click("#mBuy"); pg.wait_for_timeout(1800)
+    pg.click("#payCrypto"); pg.wait_for_timeout(500)
+    pg.fill("#txh", "0xabc")
+    pg.click("#cGo"); pg.wait_for_timeout(1200)
+    print("  says it is waiting:", "confirm" in (pg.text_content("#payMsg") or "").lower())
+    state["paid"] = True
+    pg.wait_for_timeout(6500)                      # the watcher polls every 5s
+    area = pg.inner_text("#payArea") or ""
+    print("  offers to use it here:", pg.is_visible("#useHere"))
+    print("  offers to save the link:", pg.is_visible("#saveIt"))
+    if not pg.is_visible("#useHere"): fails.append("paid order never produced the config")
+    before = pg.evaluate("() => window.__imported || 0")
+    pg.click("#useHere"); pg.wait_for_timeout(600)
+    after = pg.evaluate("() => window.__imported || 0")
+    print("  using it adds it to the tunnel:", after > before)
+    if after <= before: fails.append("use-here did not import")
+    pg.unroute("**/api/buy*"); pg.unroute("**/api/order/**")
+
     print("=== an unlimited plan is not offered a renewal ===")
-    pg.click("#sheetClose"); pg.wait_for_timeout(400)
+    # A successful purchase closes the sheet by itself, so only close it if it
+    # is still open.
+    pg.evaluate("() => { const b=document.getElementById('sheetClose'); if (b && document.getElementById('sheet').style.display==='flex') b.click(); }")
+    pg.wait_for_timeout(600)
     pg.route("**/api/plan*", lambda route: route.fulfill(
         status=200, content_type="application/json",
         headers={"Access-Control-Allow-Origin": "*"},
@@ -198,7 +263,9 @@ with sync_playwright() as p:
     if "Unlimited" not in body2: fails.append("unlimited not stated")
 
     print("=== closing returns to a live connect screen ===")
-    pg.click("#sheetClose"); pg.wait_for_timeout(700)
+    pg.evaluate("() => { const b=document.getElementById('sheetClose');"
+                " if (b && document.getElementById('sheet').style.display==='flex') b.click(); }")
+    pg.wait_for_timeout(700)
     print("  sheet closed:", not pg.is_visible("#sheet"),
           "| still connected:", pg.eval_on_selector("#stage","e=>e.classList.contains('on')"))
     if pg.is_visible("#sheet"): fails.append("sheet would not close")

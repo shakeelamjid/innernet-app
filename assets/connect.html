@@ -355,26 +355,16 @@
     el.onclick = function(e){
       e.preventDefault();
       history.pushState({sheet:1}, "");     // so Back closes the sheet
-      if(url){
-        openSheet(title);
-        // Learn the token first when we do not have one, so the page opens
-        // knowing which config it is looking at rather than offering to sell a
-        // new one.
-        if(!PLAN_TOKEN && configId()){
-          sheetHTML('<p style="color:var(--dim);font-size:13px">Opening…</p>');
-          fetch(SITE + "/api/plan?link=" + encodeURIComponent(configId()), {cache:"no-store"})
-            .then(function(r){ return r.json(); })
-            .then(function(j){ if(j && j.token) PLAN_TOKEN = j.token; })
-            .catch(function(){})
-            .then(function(){ sheetURL(storeURL(url)); });
-        } else {
-          sheetURL(storeURL(url));
-        }
-      } else if(title === "Renew"){ showRenew(); } else { showPlan(); }
+      // Every screen is drawn here now. Nothing loads a server page, so there
+      // is one header, one set of buttons, and no second navigation appearing
+      // underneath the app's own.
+      if(title === "Renew"){ showRenew(); }
+      else if(title === "Buy"){ showBuy(); }
+      else { showPlan(); }
       return false;
     };
   }
-  sheetLink($("mBuy"), "Buy", "/buy");
+  sheetLink($("mBuy"), "Buy", "");
   sheetLink($("mRenew"), "Renew", "");          // drawn here, not fetched
   sheetLink($("mAccount"), "My plan", "");
 
@@ -514,6 +504,7 @@
     $("sheet").style.display = "flex";
   }
   function closeSheet(){
+    stopWatching();
     $("sheet").style.display = "none";
     $("sheetFrame").style.display = "none";
     $("sheetFrame").src = "about:blank";
@@ -625,7 +616,7 @@
             '<button class="btn" id="planBuy" style="flex:1">Buy another</button></div>'));
       var pr=$("planRenew"), pb=$("planBuy");
       if(pr) pr.onclick = function(){ showRenew(); };
-      if(pb) pb.onclick = function(){ openSheet("Buy"); sheetURL(storeURL("/buy")); };
+      if(pb) pb.onclick = function(){ showBuy(); };
     }catch(e){
       sheetHTML('<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
         "Can't reach the store right now, so the plan can't be checked. " +
@@ -683,15 +674,19 @@
     return el ? parseInt(el.textContent, 10) : 0;
   }
 
+  function buying(){ return $("sheetTitle").textContent === "Buy"; }
+
   async function priceNow(){
-    if(!RENEW) return;
-    var q = "?link=" + encodeURIComponent(configId()) +
-            "&gb=" + readStep("gb") + "&days=" + readStep("days");
+    var q = "?gb=" + readStep("gb") + "&days=" + readStep("days");
+    var url = buying()
+      ? SITE + "/api/buy" + q
+      : SITE + "/api/renew" + q + "&link=" + encodeURIComponent(configId());
     try{
-      var r = await fetch(SITE + "/api/renew" + q, {cache:"no-store"});
+      var r = await fetch(url, {cache:"no-store"});
       var j = await r.json();
-      if(j.ok && $("rPrice")) $("rPrice").textContent = j.price;
-      if(j.ok) RENEW = j;
+      if(!j.ok) return;
+      if($("rPrice")) $("rPrice").textContent = j.price;
+      if(buying()){ BUY = j; } else { RENEW = j; }
     }catch(e){}
   }
 
@@ -727,6 +722,62 @@
     }
   }
 
+  // ---- a paid order finishes itself -----------------------------------------
+  // A crypto payment used to end at "sent, awaiting confirmation" and stop
+  // there: the config appeared on the server minutes later and nothing told the
+  // phone. Watching the order closes that gap, and when it lands the customer
+  // chooses what happens to it.
+  var watching = null;
+
+  function stopWatching(){
+    if(watching){ clearInterval(watching); watching = null; }
+  }
+
+  function offerConfig(j){
+    stopWatching();
+    var name = (j.name || "your connection").replace(/[<>&]/g, "");
+    $("payArea").innerHTML =
+      '<div style="background:var(--card);border:1px solid var(--acc);border-radius:12px;' +
+      'padding:14px;margin-bottom:12px">' +
+      '<b style="font-size:14px;color:var(--acc)">Payment confirmed</b>' +
+      '<div style="font-size:13px;color:var(--mut);margin-top:4px">' + name + ' is ready.</div></div>' +
+      '<button class="btn primary" id="useHere" style="width:100%">Use it on this phone</button>' +
+      '<button class="btn" id="saveIt" style="width:100%;margin-top:8px">Save the link instead</button>' +
+      '<div id="useMsg" style="font-size:13px;margin-top:10px;color:var(--mut)"></div>';
+    $("useHere").onclick = function(){
+      var ok = false;
+      try{ ok = !!(BR && BR.importConfig && BR.importConfig(j.link)); }catch(e){}
+      $("useMsg").textContent = ok
+        ? "Added. Close this and tap connect."
+        : "Could not add it here — save the link and add it manually.";
+      if(ok) setTimeout(function(){ closeSheet(); }, 1600);
+    };
+    $("saveIt").onclick = function(){
+      // Deliberately shown rather than copied silently: on another device this
+      // is the only copy the customer has.
+      $("useMsg").innerHTML =
+        '<div style="font-family:ui-monospace,monospace;font-size:11.5px;word-break:break-all;' +
+        'background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:11px;' +
+        'user-select:all;-webkit-user-select:all">' + j.link.replace(/[<>&]/g, "") + '</div>' +
+        '<div style="margin-top:6px">Press and hold to copy.</div>';
+    };
+  }
+
+  function watchOrder(token){
+    stopWatching();
+    var tries = 0;
+    watching = setInterval(async function(){
+      tries++;
+      if(tries > 120){ stopWatching(); return; }      // ten minutes, then stop
+      try{
+        var r = await fetch(SITE + "/api/order/" + encodeURIComponent(token),
+                            {cache:"no-store"});
+        var j = await r.json();
+        if(j.ok && j.status === "verified" && j.link){ offerConfig(j); }
+      }catch(e){ /* offline; keep trying while the sheet is open */ }
+    }, 5000);
+  }
+
   function offlineNote(){
     return '<p style="color:var(--mut);font-size:14px;line-height:1.6">' +
       "Can't reach the store right now.</p>" +
@@ -759,13 +810,14 @@
       return;
     }
     if(e.target.id === "payCrypto"){
-      var n = RENEW.networks[0];
+      var ctx = buying() ? BUY : RENEW;
+      var n = ctx.networks[0];
       $("payArea").innerHTML =
         '<div style="font-size:13px;color:var(--mut);margin-bottom:6px">Send ' +
-        RENEW.price + ' of USDT (' + n + ') to</div>' +
+        ctx.price + ' of USDT (' + n + ') to</div>' +
         '<div style="font-family:ui-monospace,monospace;font-size:12.5px;word-break:break-all;' +
         'background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:11px">' +
-        (RENEW.wallets[n] || "") + '</div>' +
+        (ctx.wallets[n] || "") + '</div>' +
         '<input id="txh" placeholder="Transaction hash" style="width:100%;margin-top:10px;' +
         'padding:12px;border-radius:10px;border:1px solid var(--bd);background:var(--card);' +
         'color:var(--ink);font:inherit">' +
@@ -779,27 +831,41 @@
     if(e.target.id === "vGo" || e.target.id === "cGo"){
       var msg = $("payMsg");
       msg.textContent = "Sending…"; msg.style.color = "var(--dim)";
-      var body = "link=" + encodeURIComponent(configId()) +
-                 "&gb=" + readStep("gb") + "&days=" + readStep("days");
+      var isBuy = buying();
+      var ctx2 = isBuy ? BUY : RENEW;
+      var body = "gb=" + readStep("gb") + "&days=" + readStep("days");
+      if(!isBuy) body += "&link=" + encodeURIComponent(configId());
+      if(isBuy && $("devName")) body += "&name=" + encodeURIComponent($("devName").value || "");
       if(e.target.id === "vGo"){
         body += "&method=card&code=" + encodeURIComponent(($("vCode").value || "").trim());
       } else {
-        body += "&network=" + encodeURIComponent(RENEW.networks[0]) +
+        body += "&network=" + encodeURIComponent(ctx2.networks[0]) +
                 "&tx_hash=" + encodeURIComponent(($("txh").value || "").trim()) +
                 "&contact=" + encodeURIComponent(($("contact").value || "").trim());
       }
       try{
-        var r = await fetch(SITE + "/api/renew", {method:"POST",
+        var r = await fetch(SITE + (isBuy ? "/api/buy" : "/api/renew"), {method:"POST",
           headers:{"Content-Type":"application/x-www-form-urlencoded"}, body: body});
         var j = await r.json();
         if(j.ok && j.paid === "voucher"){
           msg.style.color = "var(--acc)";
-          msg.textContent = "Done — renewed. " + (j.left ? j.left + " left on the voucher." : "");
-          setTimeout(function(){ closeSheet(); }, 1800);
+          if(j.link && BR && BR.importConfig){
+            // A purchase made in the app should end with a working connection,
+            // not a QR code the customer has to scan off their own screen.
+            try{ BR.importConfig(j.link); }catch(err){}
+            msg.textContent = "Done — the new connection has been added to this phone.";
+          } else {
+            msg.textContent = "Done — renewed. " +
+                              (j.left ? j.left + " left on the voucher." : "");
+          }
+          setTimeout(function(){ closeSheet(); }, 1900);
         } else if(j.ok && j.order){
           msg.style.color = "var(--acc)";
-          msg.textContent = "Sent. It will be confirmed shortly and the time added " +
-                            "to this same connection.";
+          msg.textContent = isBuy
+            ? "Sent. Waiting for the payment to confirm — this usually takes a " +
+              "few minutes, and the connection appears here when it does."
+            : "Sent. Once it confirms, the time is added to this same connection.";
+          if(isBuy) watchOrder(j.order);
         } else {
           msg.style.color = "var(--amber)";
           msg.textContent = j.error || "That did not go through.";
@@ -810,6 +876,37 @@
       }
     }
   });
+
+  // ---- buying a new connection, drawn here as well -------------------------
+  var BUY = null;
+
+  async function showBuy(){
+    openSheet("Buy");
+    sheetHTML('<p style="color:var(--dim);font-size:13px">Checking…</p>');
+    try{
+      var r = await fetch(SITE + "/api/buy", {cache:"no-store"});
+      var j = await r.json();
+      if(!j.ok) throw new Error("failed");
+      BUY = j;
+      sheetHTML(
+        stepper("Data", "gb", j.gb, j.min_gb, j.max_gb, j.step_gb, "GB") +
+        stepper("Time", "days", j.days, j.min_days, j.max_days, j.step_days, "days") +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;' +
+        'padding:14px 0;border-top:1px solid var(--bd);margin-top:4px">' +
+        '<span style="color:var(--mut);font-size:13px">Total</span>' +
+        '<b id="rPrice" style="font-size:22px">' + j.price + '</b></div>' +
+        '<input id="devName" placeholder="Name this connection" ' +
+        'style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--bd);' +
+        'background:var(--card);color:var(--ink);font:inherit;margin-bottom:8px">' +
+        '<div style="display:flex;gap:8px">' +
+        '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
+        (j.networks.length
+          ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
+        '</div><div id="payArea" style="margin-top:14px"></div>');
+    }catch(e){
+      sheetHTML(offlineNote());
+    }
+  }
 
   var retestBtn = $("retest");
   if(retestBtn) retestBtn.onclick = function(){ measure(false); };
