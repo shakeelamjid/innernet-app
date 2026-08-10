@@ -109,6 +109,9 @@ class InnernetActivity : FragmentActivity() {{
     /** What the service last told us. The core lives in another process, so this
      *  broadcast — not a local flag — is the only honest answer. */
     @Volatile private var serviceRunning = false
+    // True between asking the service for its state and hearing back. If it
+    // never answers, it is not running.
+    @Volatile private var awaitingState = false
     private var stateReceiver: android.content.BroadcastReceiver? = null
 
     private val notifyPermission = registerForActivityResult(
@@ -221,11 +224,13 @@ class InnernetActivity : FragmentActivity() {{
                 when (intent?.getIntExtra("key", 0)) {{
                     com.v2ray.ang.AppConfig.MSG_STATE_RUNNING,
                     com.v2ray.ang.AppConfig.MSG_STATE_START_SUCCESS -> {{
+                        awaitingState = false
                         serviceRunning = true; pushState(true)
                     }}
                     com.v2ray.ang.AppConfig.MSG_STATE_NOT_RUNNING,
                     com.v2ray.ang.AppConfig.MSG_STATE_START_FAILURE,
                     com.v2ray.ang.AppConfig.MSG_STATE_STOP_SUCCESS -> {{
+                        awaitingState = false
                         serviceRunning = false; pushState(false)
                     }}
                 }}
@@ -263,10 +268,22 @@ class InnernetActivity : FragmentActivity() {{
 
     override fun onResume() {{
         super.onResume()
-        // ask the service where it stands; it answers on the broadcast above
+        // Ask the service where it stands; it answers on the broadcast above.
+        awaitingState = true
         com.v2ray.ang.helper.MessageHelper.sendMsg2Service(
             this, com.v2ray.ang.AppConfig.MSG_REGISTER_CLIENT, "")
-        if (::web.isInitialized) pushState(serviceRunning)
+        // A service that has died cannot answer, and that silence IS the answer.
+        // Previously the cached flag was re-asserted here instead, so a tunnel
+        // that stopped while the app was in the background kept showing as
+        // connected forever — the one lie this screen must never tell.
+        if (::web.isInitialized) {{
+            web.postDelayed({{
+                if (awaitingState) {{
+                    serviceRunning = false
+                    pushState(false)
+                }}
+            }}, 1500)
+        }}
     }}
 
     override fun onDestroy() {{
