@@ -653,7 +653,10 @@
       '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
       (j.networks.length
         ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
-      '</div><div id="payArea" style="margin-top:14px"></div>';
+      '</div>' +
+      (j.card ? '<button class="btn" id="payCard" style="width:100%;margin-top:8px">'
+                + 'Pay by card</button>' : '') +
+      '<div id="payArea" style="margin-top:14px"></div>';
   }
 
   function stepper(label, key, value, min, max, step, unit){
@@ -828,6 +831,34 @@
         '<div id="payMsg" style="font-size:13px;margin-top:10px"></div>';
       return;
     }
+    if(e.target.id === "payCard"){
+      // Cards are typed on Stripe's page, not here, so this hands off to the
+      // browser rather than collecting anything.
+      var msg0 = $("payArea");
+      msg0.innerHTML = '<div style="font-size:13px;color:var(--mut)">Opening the ' +
+        'payment page…</div>';
+      var isBuyCard = buying();
+      var b = "gb=" + readStep("gb") + "&days=" + readStep("days") + "&method=card";
+      if(!isBuyCard) b += "&link=" + encodeURIComponent(configId());
+      if(isBuyCard && $("devName")) b += "&name=" + encodeURIComponent($("devName").value || "");
+      try{
+        var rr = await fetch(SITE + (isBuyCard ? "/api/buy" : "/api/renew"),
+          {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
+           body: b + "&network=card"});
+        var jj = await rr.json();
+        if(jj.checkout){
+          if(jj.order) watchOrder(jj.order);   // the config lands here when it clears
+          location.href = jj.checkout;
+        } else {
+          msg0.innerHTML = '<div style="font-size:13px;color:var(--amber)">' +
+            (jj.error || "Card payment could not be started.") + '</div>';
+        }
+      }catch(err){
+        msg0.innerHTML = '<div style="font-size:13px;color:var(--amber)">' +
+          "Couldn't reach the store.</div>";
+      }
+      return;
+    }
     if(e.target.id === "vGo" || e.target.id === "cGo"){
       var msg = $("payMsg");
       msg.textContent = "Sending…"; msg.style.color = "var(--dim)";
@@ -902,7 +933,10 @@
         '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
         (j.networks.length
           ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
-        '</div><div id="payArea" style="margin-top:14px"></div>');
+        '</div>' +
+        (j.card ? '<button class="btn" id="payCard" style="width:100%;margin-top:8px">'
+                  + 'Pay by card</button>' : '') +
+        '<div id="payArea" style="margin-top:14px"></div>');
     }catch(e){
       sheetHTML(offlineNote());
     }
