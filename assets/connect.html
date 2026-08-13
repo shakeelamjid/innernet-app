@@ -838,13 +838,16 @@
       msg0.innerHTML = '<div style="font-size:13px;color:var(--mut)">Opening the ' +
         'payment page…</div>';
       var isBuyCard = buying();
-      var b = "gb=" + readStep("gb") + "&days=" + readStep("days") + "&method=card";
+      // "bank", not "card": method=card is the VOUCHER, from before it was
+      // renamed. Sending that here made the server try to redeem an empty
+      // voucher and answer "not available or already used".
+      var b = "gb=" + readStep("gb") + "&days=" + readStep("days") + "&method=bank";
       if(!isBuyCard) b += "&link=" + encodeURIComponent(configId());
       if(isBuyCard && $("devName")) b += "&name=" + encodeURIComponent($("devName").value || "");
       try{
         var rr = await fetch(SITE + (isBuyCard ? "/api/buy" : "/api/renew"),
           {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"},
-           body: b + "&network=card"});
+           body: b + "&network=bank"});
         var jj = await rr.json();
         if(jj.checkout){
           if(jj.order) watchOrder(jj.order);   // the config lands here when it clears
