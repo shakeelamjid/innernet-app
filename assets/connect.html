@@ -649,13 +649,14 @@
       'padding:14px 0;border-top:1px solid var(--bd);margin-top:4px">' +
       '<span style="color:var(--mut);font-size:13px">Total</span>' +
       '<b id="rPrice" style="font-size:22px">' + j.price + '</b></div>' +
-      '<div style="display:flex;gap:8px;margin-top:6px">' +
-      '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
+      (j.card ? '<button class="btn primary" id="payCard" style="width:100%;margin-top:6px">'
+                + 'Pay by card</button>' : '') +
+      '<div style="display:flex;gap:8px;margin-top:8px">' +
       (j.networks.length
         ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
+      '<button class="btn' + (j.card ? '' : ' primary') + '" id="payVoucher" ' +
+      'style="flex:1">Pay with voucher</button>' +
       '</div>' +
-      (j.card ? '<button class="btn" id="payCard" style="width:100%;margin-top:8px">'
-                + 'Pay by card</button>' : '') +
       '<div id="payArea" style="margin-top:14px"></div>';
   }
 
@@ -932,13 +933,14 @@
         '<input id="devName" placeholder="Name this connection" ' +
         'style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--bd);' +
         'background:var(--card);color:var(--ink);font:inherit;margin-bottom:8px">' +
-        '<div style="display:flex;gap:8px">' +
-        '<button class="btn primary" id="payVoucher" style="flex:1">Pay with voucher</button>' +
+        (j.card ? '<button class="btn primary" id="payCard" style="width:100%">'
+                  + 'Pay by card</button>' : '') +
+        '<div style="display:flex;gap:8px;margin-top:8px">' +
         (j.networks.length
           ? '<button class="btn" id="payCrypto" style="flex:1">Pay with USDT</button>' : '') +
+        '<button class="btn' + (j.card ? '' : ' primary') + '" id="payVoucher" ' +
+        'style="flex:1">Pay with voucher</button>' +
         '</div>' +
-        (j.card ? '<button class="btn" id="payCard" style="width:100%;margin-top:8px">'
-                  + 'Pay by card</button>' : '') +
         '<div id="payArea" style="margin-top:14px"></div>');
     }catch(e){
       sheetHTML(offlineNote());
